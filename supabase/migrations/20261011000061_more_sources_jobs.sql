@@ -9,3 +9,6 @@ insert into ops.etl_job (name, command, interval_minutes, source_slug, timeout_s
   ('sepa_extra',     '../../.venv/bin/python -W ignore ../etl/sepa_extra.py',     15, 'sepa_kiwis',         600, 60),
   ('nrfa_recent',    '../../.venv/bin/python -W ignore ../etl/nrfa_recent.py',    43200, 'nrfa',          3600, 100000)
 on conflict (name) do update set command = excluded.command, interval_minutes = excluded.interval_minutes, source_slug = excluded.source_slug, timeout_s = excluded.timeout_s, max_lag_minutes = excluded.max_lag_minutes;
+insert into ops.etl_job (name, command, interval_minutes, source_slug, timeout_s, max_lag_minutes) values
+  ('bathing_recent', '../../.venv/bin/python -W ignore ../etl/bathing_recent.py', 360, 'ea_bathing', 600, 2880)
+on conflict (name) do update set command = excluded.command, interval_minutes = excluded.interval_minutes, source_slug = excluded.source_slug;
