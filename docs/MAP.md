@@ -60,6 +60,14 @@ Daily imagery analysis means two kinds of output, and neither needs the browser 
 
 Both carry `evidence_class` (satellite-derived is `modelled` until validated against sondes) and a licence, like every other source.
 
+## Weather layers (rain, pressure) and the time slider
+
+Not tiles: weather is one call, `api.weather(p_at)`, which returns what to show at a time. `rain` is a single Mercator-linear PNG over the UK (`wx.frame`, file under `web/wx/`, later the public `weather` bucket) drawn with `drawImage` under the rivers; `pressure` is isobars from `wx.contour` drawn as line paths with hPa labels every 4. Radar (past and now, 15-minute) is Met Office data under CC BY-SA, so the legend carries "Contains Met Office data © Crown copyright"; the forecast is ECMWF open data (3-hourly to five days). The slider walks the last three hours of radar, then the forecast; "now" returns to the live frame. The rain ramp is violet so it never reads as a river condition. Both layers are in the URL (`l=rain,pressure`).
+
+## Volunteer sites
+
+`citizen` is an ordinary point layer from `core.map_point` (Wye Alliance and Usk CaSTCo sampling sites, evidence class `citizen_science`), neutral dark diamonds. The panel (`api.volunteer_dossier`) shows the latest value per measurement, a year of phosphate, and the visit record. Values are indicative, not regulator results; Hanna phosphate readings at 2.5 mg/L are at the instrument limit.
+
 ## Known limits
 
 - Scotland has no waterbody polygons in this load: rivers show but are grey (no condition data).
