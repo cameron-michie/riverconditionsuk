@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>River Conditions UK</title>
+<style>
+  :root { --ink:#111; --dim:#6b6b6b; --line:#e4e4e4; --c1:#3b6fb6; --c2:#e6c53f; --c3:#ee8a3c; --c4:#b3202a; --c0:#aab5c0; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:#fff; color:var(--ink); font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; overflow:hidden; }
+  canvas { position:absolute; inset:0; display:block; touch-action:none; cursor:grab; } canvas.hit { cursor:pointer; }
+  button { all:unset; cursor:pointer; } button:focus-visible, input:focus-visible, summary:focus-visible, a:focus-visible { outline:2px solid var(--ink); outline-offset:2px; }
+  #bar { position:absolute; left:12px; top:10px; right:12px; display:flex; flex-wrap:wrap; gap:3px 18px; align-items:baseline; pointer-events:none; }
+  #bar > * { pointer-events:auto; background:rgba(255,255,255,.9); padding:1px 3px; }
+  .grp { display:flex; flex-wrap:wrap; gap:3px 12px; } .grp b { color:var(--dim); font-weight:400; }
+  .grp button { color:var(--dim); border-bottom:1px solid transparent; } .grp button[aria-pressed=true] { color:var(--ink); border-bottom-color:var(--ink); }
+  .aa { font-style:normal; font-size:9px; margin-left:2px; opacity:.25; vertical-align:super; } .aa.on { opacity:.9; }
+  #q { border:0; border-bottom:1px solid var(--line); font:inherit; width:9em; padding:0 0 1px; background:transparent; }
+  #hits { position:absolute; left:12px; top:36px; background:#fff; border:1px solid var(--line); max-width:300px; display:none; z-index:6; } #hits div { padding:3px 8px; cursor:pointer; } #hits div:hover { background:#f3f3f3; }
+  #legend { position:absolute; left:12px; bottom:10px; display:flex; flex-direction:column; gap:1px; color:var(--dim); background:rgba(255,255,255,.9); padding:1px 3px; max-width:calc(100% - 24px); }
+  #legend > div { display:flex; flex-wrap:wrap; gap:2px 12px; } .lg { display:inline-flex; flex-wrap:wrap; gap:2px 10px; } .lg b { font-weight:600; color:var(--ink); }
+  .dot, .sq { display:inline-block; width:9px; height:9px; margin-right:4px; vertical-align:baseline; } .dot { border-radius:50%; } .dot.ring, .sq.ring { background:#fff; border:1.5px solid #9a7b74; box-sizing:border-box; }
+  #legend i { display:inline-block; width:16px; margin-right:4px; vertical-align:middle; border-top:3px solid; }
+  #tip { position:absolute; pointer-events:none; background:#fff; border:1px solid var(--line); padding:2px 6px; display:none; white-space:nowrap; z-index:7; }
+  #status { position:absolute; right:12px; bottom:10px; color:var(--dim); background:rgba(255,255,255,.9); padding:1px 3px; z-index:1; }
+  /* this-view card */
+  #view { position:absolute; left:12px; top:40px; width:272px; max-height:calc(100% - 100px); overflow:auto; background:rgba(255,255,255,.96); border:1px solid var(--line); display:none; z-index:3; }
+  #view > summary, #view > header { padding:5px 8px; cursor:pointer; list-style:none; color:var(--dim); } #view[open] > summary { border-bottom:1px solid var(--line); color:var(--ink); }
+  #view .in { padding:6px 8px 8px; } #view h3 { margin:8px 0 2px; font-size:12px; font-weight:600; } #view h3:first-child { margin-top:0; }
+  /* panel */
+  #panel { position:absolute; right:0; top:0; bottom:0; width:min(430px,100%); background:#fff; border-left:1px solid var(--line); overflow:auto; padding:14px 18px 40px; display:none; z-index:5; }
+  #panel h1 { font-size:19px; font-weight:600; margin:0 24px 0 0; line-height:1.2; } #panel h2 { font-size:12px; font-weight:600; letter-spacing:.02em; text-transform:uppercase; color:var(--dim); margin:22px 0 6px; }
+  .kick { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--dim); margin:0 24px 2px 0; }
+  #x { position:absolute; right:14px; top:10px; color:var(--dim); font-size:20px; line-height:1; }
+  .dim { color:var(--dim); } .tag { color:var(--dim); font-size:11px; border:1px solid var(--line); padding:0 4px; margin-left:4px; white-space:nowrap; }
+  .sig { padding:7px 0; border-top:1px solid var(--line); } .sig:first-of-type { border-top:0; }
+  .sig .top { display:flex; align-items:center; gap:10px; } .sig .nm { width:5.6em; font-weight:600; } .sig .wd { flex:1; } .sig .why { color:var(--dim); margin:2px 0 0 calc(5.6em + 10px); font-size:12px; }
+  .lad { display:inline-flex; gap:2px; vertical-align:middle; } .lad i { width:11px; height:11px; background:#eee; } .lad i.on1 { background:var(--c1); } .lad i.on2 { background:var(--c2); } .lad i.on3 { background:var(--c3); } .lad i.on4 { background:var(--c4); } .lad.none i { background:repeating-linear-gradient(135deg,#ccc 0 2px,#fff 2px 4px); }
+  .big { font-size:15px; } .now { display:flex; flex-wrap:wrap; gap:4px 18px; } .now div b { font-size:16px; font-weight:600; }
+  .bar { display:flex; align-items:center; gap:8px; margin:2px 0; } .bar .n { width:10em; } .bar .v { width:3em; text-align:right; } .bar i { display:block; height:8px; background:repeating-linear-gradient(135deg,#444 0 3px,#fff 3px 5px); outline:1px solid #444; }
+  .bands { display:inline-flex; width:100%; } .bands i { flex:1; text-align:center; font-style:normal; font-size:11px; padding:3px 0; background:#eee; color:#888; } .bands i.on { font-weight:600; }
+  .rks { display:flex; flex-wrap:wrap; gap:4px; } .rk { border:1px solid var(--line); padding:3px 7px; border-left-width:5px; } .rk b { font-weight:600; } .rk.r0 { border-left-color:#c9d6e0; } .rk.r1 { border-left-color:#e6c53f; } .rk.r2 { border-left-color:#ee8a3c; } .rk.r3 { border-left-color:#b3202a; }
+  details { border-top:1px solid var(--line); } details > summary { padding:6px 0; cursor:pointer; list-style:none; font-weight:600; } details > summary::before { content:"+ "; color:var(--dim); } details[open] > summary::before { content:"− "; }
+  ul { list-style:none; padding:0; margin:0; } li { padding:3px 0; } a { color:inherit; }
+  .st { padding:5px 0; border-top:1px solid var(--line); } .st:first-child { border-top:0; } .st .l { display:flex; gap:6px; flex-wrap:wrap; margin-top:2px; }
+  .bgd { display:inline-block; width:9px; height:9px; margin-right:5px; background:var(--c0); } .bgd.r1 { background:var(--c1); } .bgd.r2 { background:var(--c2); } .bgd.r3 { background:var(--c3); } .bgd.r4 { background:var(--c4); }
+  @media (max-width:700px) { #panel { top:auto; height:62%; width:100%; border-left:0; border-top:1px solid var(--line); } #view { display:none !important; } }
+</style>
+</head>
+<body>
+<canvas id="map" aria-label="map of UK rivers"></canvas>
+<div id="bar" role="toolbar"></div>
+<div id="hits"></div>
+<details id="view"><summary>this view</summary><div class="in"></div></details>
+<div id="legend"></div>
+<div id="status"></div>
+<div id="tip"></div>
+<aside id="panel"><button id="x" aria-label="close">×</button><div id="doc"></div></aside>
+<script src="d3.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

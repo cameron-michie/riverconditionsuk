@@ -1,0 +1,9 @@
+data/
+supabase/.branches/
+supabase/.temp/
+__pycache__/
+*.pyc
+supabase_creds.md
+.env
+.env.*
+.DS_Store
