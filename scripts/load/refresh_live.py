@@ -22,6 +22,7 @@ with connect() as conn, conn.cursor() as cur:
     cur.execute("""insert into core.observation_latest (series_id, observed_at, value, quality) select distinct on (sid) sid, at, v, 'unchecked' from stg_r order by sid, at desc
                    on conflict (series_id) do update set observed_at = excluded.observed_at, value = excluded.value, quality = excluded.quality, updated_at = now() where excluded.observed_at > core.observation_latest.observed_at""")
     print("readings", len(rows), "of", len(j), round(time.time() - t0, 1), "s")
+    cur.execute("select ops.flag_implausible(now() - interval '3 hours')"); print("flagged implausible", cur.fetchone()[0])
     # ── 2. overflow statuses (English company feeds share one schema; Scottish Water has its own)
     import sewage_feeds
     cur.execute("select value, site_id from core.site_identifier where scheme = 'nsoh:id'"); NS = dict(cur.fetchall())

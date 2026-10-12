@@ -21,6 +21,8 @@
   #legend > div { display:flex; flex-wrap:wrap; gap:2px 12px; } .lg { display:inline-flex; flex-wrap:wrap; gap:2px 10px; } .lg b { font-weight:600; color:var(--ink); }
   .dot, .sq { display:inline-block; width:9px; height:9px; margin-right:4px; vertical-align:baseline; } .dot { border-radius:50%; } .dot.ring, .sq.ring { background:#fff; border:1.5px solid #9a7b74; box-sizing:border-box; }
   #legend i { display:inline-block; width:16px; margin-right:4px; vertical-align:middle; border-top:3px solid; }
+  #wx { position:absolute; right:12px; bottom:32px; width:min(330px,calc(100% - 24px)); background:rgba(255,255,255,.9); padding:1px 3px; color:var(--dim); display:none; z-index:2; }
+  #wx input { width:100%; margin:2px 0 0; accent-color:var(--ink); } #wx button { color:var(--ink); border-bottom:1px solid var(--ink); margin-left:8px; }
   #tip { position:absolute; pointer-events:none; background:#fff; border:1px solid var(--line); padding:2px 6px; display:none; white-space:nowrap; z-index:7; }
   #status { position:absolute; right:12px; bottom:10px; color:var(--dim); background:rgba(255,255,255,.9); padding:1px 3px; z-index:1; }
   /* this-view card */
@@ -52,6 +54,7 @@
 <div id="bar" role="toolbar"></div>
 <div id="hits"></div>
 <details id="view"><summary>this view</summary><div class="in"></div></details>
+<div id="wx"><div id="wxl"></div><input id="wxt" type="range" min="0" max="0" step="1" value="0" aria-label="time"></div>
 <div id="legend"></div>
 <div id="status"></div>
 <div id="tip"></div>

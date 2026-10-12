@@ -118,12 +118,14 @@ function draw() {
   // natural water at true size, under everything else
   if (act("water")) { drawn.water = visible("water", z, bb); ctx.fillStyle = "#d3e6f5"; ctx.strokeStyle = "#8fb4d9"; ctx.lineWidth = lw(0.6); for (const t of drawn.water) { ctx.fill(t.all); if (z >= 8) ctx.stroke(t.all); } }
   if (act("beaches")) { drawn.beaches = visible("beaches", z, bb); ctx.fillStyle = "#efdca8"; ctx.strokeStyle = "#c2a24f"; ctx.lineWidth = lw(0.9); for (const t of drawn.beaches) { ctx.fill(t.all); ctx.stroke(t.all); } }   // true size; the 0.9 px outline keeps slivers findable
+  if (on.rain && WX.img && WX.img.complete && WX.rb) { const p0 = proj([WX.rb[0], WX.rb[3]]), p1 = proj([WX.rb[2], WX.rb[1]]); ctx.imageSmoothingEnabled = true; ctx.drawImage(WX.img, p0[0], p0[1], p1[0] - p0[0], p1[1] - p0[1]); }   // radar now, forecast later; one Mercator-linear PNG
   // overlays
   if (act("urban")) { drawn.urban = visible("urban", z, bb); const fa = z <= 9 ? 0.10 : z <= 11 ? 0.05 : 0; ctx.fillStyle = "rgba(95,95,95," + fa + ")"; ctx.strokeStyle = "rgba(95,95,95,.4)"; ctx.lineWidth = lw(0.7); for (const t of drawn.urban) { if (fa) ctx.fill(t.all); if (z >= 8) ctx.stroke(t.all); } }
   if (act("national_parks")) { drawn.national_parks = visible("national_parks", z, bb); ctx.fillStyle = "rgba(46,125,80," + (z <= 10 ? 0.08 : 0.04) + ")"; ctx.strokeStyle = "rgba(46,125,80,.65)"; ctx.lineWidth = lw(1); for (const t of drawn.national_parks) { ctx.fill(t.all); ctx.stroke(t.all); } }
   if (act("flood_outlook")) { drawn.flood_outlook = visible("flood_outlook", z, bb); ctx.lineWidth = lw(0.8); for (const t of drawn.flood_outlook) for (const f of t.polys) { const r = f.p.r | 0; ctx.fillStyle = ["rgba(0,0,0,0)", "rgba(230,197,63,.30)", "rgba(238,138,60,.38)", "rgba(179,32,42,.42)"][r]; ctx.strokeStyle = r ? "rgba(120,90,20,.55)" : "rgba(150,150,150,.45)"; ctx.fill(f.path); ctx.stroke(f.path); } }
   if (act("flood_warnings")) { drawn.flood_warnings = visible("flood_warnings", z, bb); ctx.lineWidth = lw(1.6); for (const t of drawn.flood_warnings) for (const f of t.polys) { const sv = f.p.sv | 3; ctx.fillStyle = sv === 3 ? "rgba(230,160,40,.35)" : "rgba(179,32,42,.40)"; ctx.strokeStyle = sv === 3 ? "#c47f00" : "#b3202a"; ctx.fill(f.path); ctx.stroke(f.path); } }
   if (act("flood_zones")) { drawn.flood_zones = visible("flood_zones", z, bb); let any = false; for (const t of drawn.flood_zones) for (const f of t.polys) { any = true; const z3 = f.p.z === "FZ3"; ctx.fillStyle = z3 ? "rgba(200,20,30,.42)" : "rgba(200,20,30,.22)"; ctx.strokeStyle = z3 ? "rgba(179,32,42,.95)" : "rgba(179,32,42,.5)"; ctx.lineWidth = lw(z3 ? 1.1 : 0.7); ctx.fill(f.path); ctx.stroke(f.path); } if (any !== zonesShown) { zonesShown = any; legendUI(); } }
+  if (on.pressure && WX.path) { ctx.strokeStyle = "rgba(80,70,100,.5)"; ctx.lineWidth = lw(0.8); ctx.stroke(WX.path); ctx.strokeStyle = "rgba(80,70,100,.8)"; ctx.lineWidth = lw(1.4); ctx.stroke(WX.major); }
   // selected river: thin guide along its whole length, other rivers dimmed, the river itself outlined where it is drawn
   const S = sel && sel.key;
   if (S && sel.path) { ctx.strokeStyle = "rgba(17,17,17,.6)"; ctx.lineWidth = lw(1.4); ctx.stroke(sel.path); }
@@ -149,6 +151,7 @@ function draw() {
   if (lab.urban && drawn.urban) for (const t of drawn.urban) for (const f of t.polys) { const a = f.p.a || 0, minz = f.p.m || a >= 60 ? 5 : a >= 15 ? 8 : 10; if (f.lp && z >= minz) label(f.p.n, f.lp[0] * T.k + T.x, f.lp[1] * T.k + T.y, (f.p.m || a >= 60 ? "600 " : "") + "11px system-ui", "#444"); }
   if (lab.water && drawn.water) for (const t of drawn.water) for (const f of t.polys) { const a = f.p.a || 0; if (f.p.n && f.lp && (a >= 8 || (z >= 8 && a >= 0.4) || (z >= 10 && a >= 0.08) || z >= 12)) label(f.p.n, f.lp[0] * T.k + T.x, f.lp[1] * T.k + T.y, "italic 11px system-ui", "#3b6fb6"); }
   if (lab.beaches && drawn.beaches) for (const t of drawn.beaches) for (const f of t.polys) if (f.p.n && f.lp && z >= 11) label(f.p.n, f.lp[0] * T.k + T.x, f.lp[1] * T.k + T.y, "italic 11px system-ui", "#8a6d1c");
+  if (on.pressure) for (const q of WX.labels) { const x = sx(q), y = sy(q); if (x > 0 && y > 0 && x < W && y < H) label(q.t, x, y + 4, "600 11px system-ui", "#4a4060"); }
   // points, least to most urgent
   for (const code of ["bridges", "gauges", "bathing", "sewage_works", "overflows"]) {
     if (!act(code)) continue; drawn[code] = visible(code, z, bb);
@@ -443,6 +446,45 @@ async function loadView() {
 }
 vin.addEventListener("click", e => { const s = e.target.closest("[data-sig]"); if (s) { pickSignal(+s.dataset.sig); return; } const f = e.target.closest("[data-fly]"); if (f) { const [x, y] = f.dataset.fly.split(",").map(Number); flyTo(x, y, 13); } });
 
+// ───────────────────────── weather: rain (radar now, forecast later) and pressure (isobars). One call per chosen time.
+const WX = { d: null, img: null, rb: null, path: null, major: null, labels: [], times: [], idx: -1, at: null, seq: 0 }, IMGS = new Map();
+const RAIN = [["#e2daf0", "0.1"], ["#b090d0", "1"], ["#6a3fa0", "4"], ["#2e1260", "16"]];
+const wxt = t => { const d = new Date(t), fc = d - Date.now() > 3600e3; return d.toLocaleString("en-GB", fc ? { weekday: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" }); };
+const wxOn = () => on.rain || on.pressure;
+function loadWx() {
+  if (!wxOn()) { wxUI(); legendUI(); redraw(); return; }
+  const seq = ++WX.seq;
+  rpc("weather", WX.at ? { p_at: WX.at } : {}).then(d => {
+    if (seq !== WX.seq) return;
+    WX.d = d; WX.times = d.times || [];
+    WX.rb = d.rain?.bbox || null; WX.img = null;
+    if (d.rain) { let im = IMGS.get(d.rain.path); if (!im) { im = new Image(); im.onload = redraw; im.src = (RC.media || "") + d.rain.path; IMGS.set(d.rain.path, im); if (IMGS.size > 60) IMGS.delete(IMGS.keys().next().value); } WX.img = im; }
+    WX.path = new Path2D(); WX.major = new Path2D(); WX.labels = [];
+    for (const ln of d.pressure?.lines || []) { const maj = ln.l % 4 === 0, tg = maj ? WX.major : WX.path;
+      for (const seg of ln.g) { seg.forEach(([lo, la], i) => { const p = proj([lo, la]); i ? tg.lineTo(p[0], p[1]) : tg.moveTo(p[0], p[1]); });
+        if (maj && seg.length > 20) { const q = proj(seg[seg.length >> 1]); WX.labels.push({ px: q[0], py: q[1], t: String(ln.l) }); } } }
+    wxUI(); legendUI(); redraw();
+  }).catch(e => console.error("weather", e));
+}
+function wxUI() {
+  const el = $("#wx"), r = $("#wxt");
+  if (!wxOn() || !WX.times.length) { el.style.display = "none"; return; }
+  const live = WX.times.map(t => t.kind).lastIndexOf("radar"); r.max = WX.times.length - 1;
+  if (WX.at == null) r.value = live;
+  el.style.display = "block"; wxLabel();
+}
+function wxLabel() {
+  const i = +$("#wxt").value, t = WX.times[i]; if (!t) return;
+  $("#wxl").innerHTML = `${t.kind === "radar" ? "" : "forecast · "}${wxt(t.at)}${WX.at != null ? ` <button id="wxnow">now</button>` : ""}`;
+}
+function wxInit() {
+  const r = $("#wxt"); let t = 0;
+  r.addEventListener("input", () => { const i = +r.value, live = WX.times.map(x => x.kind).lastIndexOf("radar"); WX.at = i === live ? null : WX.times[i].at; wxLabel(); clearTimeout(t); t = setTimeout(loadWx, 120); });
+  $("#wx").addEventListener("click", e => { if (e.target.id === "wxnow") { WX.at = null; loadWx(); } });
+  setInterval(() => { if (WX.at == null && wxOn()) loadWx(); }, 300000);
+  if (wxOn()) loadWx();
+}
+
 // ───────────────────────── controls
 function legendUI() {
   const row = [], flow = sigI >= 0 && SIGS[sigI].code === "flow";
@@ -452,20 +494,22 @@ function legendUI() {
   if (on.overflows || on.sewage_works) row.push(`<span class="lg"><b>sewage</b>${on.overflows ? `<span><i class="dot" style="background:${COL[4]}"></i>overflow discharging</span><span><i class="dot" style="background:#cf8b80"></i>monitored</span><span><i class="dot ring"></i>unmonitored</span>` : ""}${on.sewage_works ? `<span><i class="sq" style="background:${SEWAGE}"></i>works, effluent monitored</span><span><i class="sq ring"></i>not monitored</span>` : ""}</span>`);
   if (zonesShown) row.push(`<span class="lg"><b>flood risk</b><span><i class="sq" style="background:rgba(179,32,42,.35);border:1px solid #b3202a"></i>expected flood plain (danger zone)</span></span>`);
   if (on.flood_outlook) row.push(`<span class="lg"><b>flood risk, 5 days</b>${[["#fff", "very low"], ["#e6c53f", "low"], ["#ee8a3c", "medium"], ["#b3202a", "high"]].map(([c, t]) => `<span><i class="sq" style="background:${c};border:1px solid #bbb"></i>${t}</span>`).join("")}</span>`);
+  if (on.rain && WX.d?.rain) { const r = WX.d.rain; row.push(`<span class="lg"><b>rain</b>${RAIN.map(([c, t]) => `<span><i class="sq" style="background:${c}"></i>${t}</span>`).join("")}<span>mm/h</span><span class="dim">${esc(r.source)} · ${wxt(r.valid_at)} · ${r.kind === "radar" ? "Contains Met Office data © Crown copyright" : "Contains ECMWF open data"}</span></span>`); }
+  if (on.pressure && WX.d?.pressure) { const p = WX.d.pressure; row.push(`<span class="lg"><b>pressure</b><span><i style="border-color:#504664;border-top-width:1px"></i>isobars, hPa</span><span class="dim">${esc(p.source)} · ${wxt(p.valid_at)}</span></span>`); }
   $("#legend").innerHTML = row.map(r => `<div>${r}</div>`).join("");
 }
 function sigUI() { $("#sg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", +b.dataset.i === sigI)); legendUI(); }
 function setParam(k, v) { const q = new URLSearchParams(location.search); q.set(k, v); history.replaceState(null, "", "?" + q + location.hash); }
 function pickSignal(i) { sigI = sigI === i ? -1 : i; setParam("s", sigI < 0 ? "" : SIGS[sigI].code); sigUI(); redraw(); loadView(); const h = location.hash.slice(1); if (h && h !== "!") route(false); }
 function buildBar() {
-  const GROUPS = [["overlay", "map"], ["sewage", "sewage"], ["points", "points"]];
+  const GROUPS = [["overlay", "map"], ["weather", "weather"], ["sewage", "sewage"], ["points", "points"]];
   const btn = l => `<button data-l="${l.code}" aria-pressed="${!!on[l.code]}"${l.labels ? ' title="click to show or hide; double-click for names"' : ""}>${esc(l.label)}${l.labels ? `<i class="aa${lab[l.code] ? " on" : ""}" aria-hidden="true">Aa</i>` : ""}</button>`;
   const grp = (g, title) => { const ls = cfg.layers.filter(l => l.group === g); return ls.length ? `<span class="grp"><b>${title}</b>${ls.map(btn).join("")}</span>` : ""; };
   $("#bar").innerHTML = `<span class="grp" id="sg">${SIGS.map((s, i) => `<button data-i="${i}">${esc(s.label)}</button>`).join("")}</span>${GROUPS.map(([g, t]) => grp(g, t)).join("")}<input id="q" type="search" placeholder="river" autocomplete="off" aria-label="search rivers">`;
   $("#sg").addEventListener("click", e => { const i = e.target.dataset?.i; if (i != null) pickSignal(+i); });
   const urlParam = setParam;
   $("#bar").addEventListener("click", e => { const btn0 = e.target.closest("button[data-l]"); if (!btn0) return;
-    const l = btn0.dataset.l; if (l) { on[l] = !on[l]; btn0.setAttribute("aria-pressed", on[l]); legendUI(); const q = new URLSearchParams(location.search); q.set("l", cfg.layers.filter(x => x.group !== "base" && on[x.code]).map(x => x.code).join(",")); history.replaceState(null, "", "?" + q + location.hash); redraw(); } });
+    const l = btn0.dataset.l; if (l) { on[l] = !on[l]; btn0.setAttribute("aria-pressed", on[l]); if (l === "rain" || l === "pressure") loadWx(); legendUI(); const q = new URLSearchParams(location.search); q.set("l", cfg.layers.filter(x => x.group !== "base" && on[x.code]).map(x => x.code).join(",")); history.replaceState(null, "", "?" + q + location.hash); redraw(); } });
   $("#bar").addEventListener("dblclick", e => { const b = e.target.closest("button[data-l]"); if (!b || !LAYERS[b.dataset.l]?.labels) return;
     const c = b.dataset.l; lab[c] = !lab[c]; b.querySelector(".aa").classList.toggle("on", lab[c]); urlParam("n", cfg.layers.filter(x => x.labels && lab[x.code]).map(x => x.code).join(",")); redraw(); });
   let st; const q = $("#q"), hits = $("#hits");
@@ -484,7 +528,7 @@ async function boot() {
   if (qp.get("s") != null) sigI = SIGS.findIndex(x => x.code === qp.get("s"));
   if (qp.get("n") != null) { const w = qp.get("n").split(","); cfg.layers.forEach(l => { if (l.labels) lab[l.code] = w.includes(l.code); }); }
   if (qp.get("l") != null) { const want = qp.get("l").split(","); cfg.layers.forEach(l => { if (l.group !== "base") on[l.code] = want.includes(l.code); }); }
-  buildBar(); sigUI();
+  buildBar(); sigUI(); wxInit();
   zoomB = d3.zoom().scaleExtent([1, 400]).on("zoom", e => { T = e.transform; wanted = new Set(); redraw(); scheduleView(); }).on("end", () => { redraw(); syncUrl(); });
   d3.select(cv).call(zoomB).on("dblclick.zoom", null);
   if (qp.get("card") === "open") view.open = true;
