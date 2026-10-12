@@ -127,7 +127,7 @@ with connect() as conn, conn.cursor() as cur:
         AL = {c: (p, u, fr, me) for c, p, u, fr, me in cur.fetchall()}
         cur.execute("select id, canonical_unit from ref.parameter"); PU = dict(cur.fetchall())
         frames = []
-        for f in sorted(glob.glob(os.path.join(RAW, "ea_wq", "obs", "*.csv.gz"))):
+        for f in sorted(glob.glob(os.path.join(RAW, "ea_wq", "obs", os.environ.get("WQ_GLOB", "*.csv.gz")))):   # WQ_GLOB=inc_*.csv.gz for the rolling window
             frames.append(pd.read_csv(f, dtype=str, usecols=["id", "samplingPoint.notation", "phenomenonTime", "samplingPurpose", "sampleMaterialType", "determinand.notation", "result", "unit"]))
         d = pd.concat(frames, ignore_index=True); del frames
         d.columns = ["id", "point", "when", "purpose", "material", "det", "result", "unit"]
@@ -164,14 +164,16 @@ with connect() as conn, conn.cursor() as cur:
                             "value_raw": d["raw"], "quality": "unchecked", "sample_id": d["sample_key"].map(samp).astype("Int64")})
         cur.execute("create temp table stg_w (series_id bigint, observed_at timestamptz, value double precision, censor text, detection_limit double precision, value_raw text, quality text, sample_id bigint) on commit drop")
         copy_df(cur, "stg_w", out)
-        cur.execute("insert into core.observation (series_id, observed_at, value, censor, detection_limit, value_raw, quality, sample_id) select * from stg_w on conflict do nothing")
+        cur.execute("insert into core.observation (series_id, observed_at, value, censor, detection_limit, value_raw, quality, sample_id) select distinct on (series_id, observed_at) * from stg_w order by series_id, observed_at on conflict (series_id, observed_at) do update set value = excluded.value, censor = excluded.censor, detection_limit = excluded.detection_limit, value_raw = excluded.value_raw, sample_id = excluded.sample_id where (core.observation.value, core.observation.censor) is distinct from (excluded.value, excluded.censor)")
+        touched = [int(x) for x in out["series_id"].unique()]
         print("wq observations", len(out), "censored", int((out["censor"].notna()).sum()), round(time.time() - t0, 1), "s")
 
-    # rollups
-    cur.execute("""insert into core.observation_latest (series_id, observed_at, value, censor, quality)
-        select distinct on (series_id) series_id, observed_at, value, censor, quality from core.observation where value is not null or censor is not null order by series_id, observed_at desc
-        on conflict (series_id) do update set observed_at = excluded.observed_at, value = excluded.value, censor = excluded.censor, quality = excluded.quality, updated_at = now()""")
-    cur.execute("update core.series s set first_at = a.mn, last_at = a.mx from (select series_id, min(observed_at) mn, max(observed_at) mx from core.observation group by 1) a where a.series_id = s.id")
+    # rollups (INCREMENTAL=1: only the series just loaded; the full-table pass over every observation takes minutes)
+    scoped = bool(os.environ.get("INCREMENTAL")) and "touched" in dir(); W = " and series_id = any(%(ids)s)" if scoped else ""; P = {"ids": touched} if scoped else {}
+    cur.execute(f"""insert into core.observation_latest (series_id, observed_at, value, censor, quality)
+        select distinct on (series_id) series_id, observed_at, value, censor, quality from core.observation where (value is not null or censor is not null){W} order by series_id, observed_at desc
+        on conflict (series_id) do update set observed_at = excluded.observed_at, value = excluded.value, censor = excluded.censor, quality = excluded.quality, updated_at = now()""", P)
+    cur.execute(f"""update core.series s set first_at = a.mn, last_at = a.mx from (select series_id, min(observed_at) mn, max(observed_at) mx from core.observation where true{W} group by 1) a where a.series_id = s.id""", P)
     conn.commit()
     for t in ("series", "sample", "observation", "observation_latest"):
         cur.execute(f"select count(*) from core.{t}"); print(t, cur.fetchone()[0])
