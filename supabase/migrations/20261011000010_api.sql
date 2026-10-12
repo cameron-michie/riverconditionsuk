@@ -1,3 +1,9 @@
+-- core.gauge_flow_now is refilled by scripts/load/derive_extras.sql; declared here so the api views below exist on a fresh database.
+create table if not exists core.gauge_flow_now (
+  site_id bigint primary key references core.site(id), series_id bigint, value double precision, observed_at timestamptz,
+  nrfa_series_id bigint, pct_of_record real, n_record bigint);
+create index if not exists gauge_flow_now_series on core.gauge_flow_now (series_id);
+create index if not exists gauge_flow_now_nrfa on core.gauge_flow_now (nrfa_series_id);
 -- Public read surface. Views run as owner (they read private schemas); nothing writable is exposed.
 
 create view api.sources as
