@@ -377,7 +377,7 @@ async function openStretch(id) {
       + (d.works?.length ? `<h2>Sewage works discharging here${tag("company_reported")}</h2>${d.works.slice(0, 8).map(w => `<div><a href="#works-${w.id}">${esc(w.name || "works")}</a> <span class="dim">${w.measured ? "effluent monitored" : "not monitored"}</span></div>`).join("")}` : "") + apHtml(ap) + reasonHtml(/water industry/i),
     agricultural_pressure: (sigI < 0 ? "" : apHtml(ap)) + reasonHtml(/agricult/i),
     algal_visual: c.brw_36m ? `<h2>Big River Watch${tag("citizen_science")}</h2><div>${nf(c.brw_36m)} surveys in three years, ${nf(c.unhealthy_36m)} called the river unhealthy</div>` : `<div class="dim" style="margin-top:8px">No citizen surveys on this stretch.</div>`,
-    flow: (fl ? (fl.method === "estimated" ? `<h2>Estimated from nearby gauges${tag("modelled")}</h2><div class="dim" style="margin-bottom:4px">No gauge on this river here. Each gauge's flow for the time of year is combined, weighted by closeness. ${esc(fl.confidence || "")} confidence.</div>${(fl.donors || []).map(x => `<div style="margin:3px 0"><a href="#gauge-${x.gauge}"><b>${esc(x.name)}</b></a> <span class="dim">${x.km} km · ${ordn(x.pct)} percentile</span></div>`).join("")}`
+    flow: `<div id="fo"></div>` + (fl ? (fl.method === "estimated" ? `<h2>Estimated from nearby gauges${tag("modelled")}</h2><div class="dim" style="margin-bottom:4px">No gauge on this river here. Each gauge's flow for the time of year is combined, weighted by closeness. ${esc(fl.confidence || "")} confidence.</div>${(fl.donors || []).map(x => `<div style="margin:3px 0"><a href="#gauge-${x.gauge}"><b>${esc(x.name)}</b></a> <span class="dim">${x.km} km · ${ordn(x.pct)} percentile</span></div>`).join("")}`
         : `<h2>Gauge used for this reading</h2><div><a href="#gauge-${fl.gauge}"><b>${esc(fl.gauge_name)}</b></a> <span class="dim">${fl.on_stretch ? "on this stretch" : fl.km_along_river + " km away on the same river"} · ${ordn(fl.pct)} percentile for the time of year</span></div>`)
       : `<div class="dim" style="margin-top:8px">No gauge within reach, so there is no flow reading.</div>`)
       + (d.gauges?.length ? `<h2>Gauges on this stretch${tag("official_monitoring")}</h2>${d.gauges.map(gaugeLine).join("")}` : "") + outlookHtml(d.outlook?.days, d.outlook?.area) + warnHtml(d.warnings) + dangerHtml(d.danger)
@@ -388,6 +388,16 @@ async function openStretch(id) {
     ${sigI < 0 ? cl(["overall"], "Overall classification") : ""}
     ${SIGS.map(s => showD(s.code) ? secs[s.code] || "" : "").join("")}
     ${r ? `<h2>The whole river</h2><div><a href="#${esc(r.slug)}" class="big">${esc(r.name)}, ${r.km} km →</a></div>` : ""}`;
+  flowOutlook(id, seq);
+}
+// Modelled flow for the next days (api.flow_outlook): the stretch's seasonal percentile band, driven by forecast rain. Shown in the flow section.
+const FBAND = ["much_lower", "lower", "normal", "higher", "much_higher"];
+async function flowOutlook(id, seq) {
+  const el = $("#fo"); if (!el) return; const o = await rpc("flow_outlook", { p_waterbody: id }).catch(() => null);
+  if (seq !== panelSeq || !o || !o.days || o.days.length < 2 || !$("#fo")) return;
+  const chips = o.days.map((x, i) => { const b = Math.max(0, FBAND.indexOf(x.band)) + 1, d = new Date(x.at);
+    return `<span class="rk" style="border-left-color:${FLOWCOL[b]}"><b>${i === 0 ? "Now" : d.toLocaleDateString("en-GB", { weekday: "short" })}</b> ${esc(x.label || x.band)}${x.confidence === "low" && i > 0 ? ` <span class="dim">·</span>` : ""}</span>`; }).join("");
+  $("#fo").innerHTML = `<h2>Flow, next days${tag("modelled")}</h2><div class="rks">${chips}</div><div class="dim" style="margin:4px 0 8px">Against normal for the time of year. Modelled from forecast rain and nearby gauges; the further ahead, the less certain.</div>`;
 }
 const geomCache = new Map();
 async function openRiver(slug, fitTo) {
