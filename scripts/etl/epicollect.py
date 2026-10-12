@@ -74,9 +74,12 @@ def fetch(slug, since):
     page, out = 1, []
     while True:
         q = f"{API}{slug}?per_page=500&page={page}&sort_order=ASC" + (f"&filter_by=uploaded_at&filter_from={since}" if since else "")
-        r = lib.get(q, timeout=300); j = r.json(); es = j["data"]["entries"]
         os.makedirs(os.path.join(lib.ROOT, "epicollect"), exist_ok=True)
-        open(os.path.join(lib.ROOT, "epicollect", f"{slug}_{(since or 'all').replace(':', '')}_p{page}.json"), "wb").write(r.content)
+        f = os.path.join(lib.ROOT, "epicollect", f"{slug}_{(since or 'all').replace(':', '')}_p{page}.json")
+        if since is None and os.path.exists(f) and page > 1: j = json.load(open(f))        # resume a backfill from the pages already on disk
+        else:
+            r = lib.get(q, timeout=300); open(f, "wb").write(r.content); j = r.json()
+        es = j["data"]["entries"]
         out += es; print(f"  {slug} page {page}/{j['meta']['last_page']}: {len(es)} entries", flush=True)
         if page >= j["meta"]["last_page"] or not es: return out
         page += 1
@@ -101,8 +104,8 @@ with connect() as conn, conn.cursor() as cur:
             if code in SITE or key not in coords: continue
             la = statistics.median(c[0] for c in coords[key]); lo = statistics.median(c[1] for c in coords[key])
             cur.execute("""insert into core.site (kind, name, geom, geom_bng, country, status, primary_source_id, attrs)
-                           values ('survey_site', %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), ST_Transform(ST_SetSRID(ST_MakePoint(%s, %s), 4326), 27700), 'GBR', 'active', %s, %s) returning id""",
-                        (p["name"], lo, la, lo, la, S, json.dumps({"code": code, "organisation": p["org"], "project": cfg["slug"]})))
+                           values ('survey_site', %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), ST_Transform(ST_SetSRID(ST_MakePoint(%s, %s), 4326), 27700), (select case b.name when 'England' then 'ENG' when 'Wales' then 'WLS' when 'Scotland' then 'SCT' end from core.boundary b where b.kind = 'country' and ST_Intersects(b.geom_lo, ST_SetSRID(ST_MakePoint(%s, %s), 4326)) limit 1), 'active', %s, %s) returning id""",
+                        (p["name"], lo, la, lo, la, lo, la, S, json.dumps({"code": code, "organisation": p["org"], "project": cfg["slug"]})))
             sid = cur.fetchone()[0]; SITE[code] = sid; tot["new_sites"] += 1
             cur.execute("insert into core.site_identifier (scheme, value, site_id, source_id) values (%s, %s, %s, %s) on conflict do nothing", (f"epicollect:{project}", code, sid, S))
             cur.execute("""with n as (select l.id, l.river_id, l.waterbody_id, l.length_m, l.dist_to_mouth_m, ST_Distance(s.geom_bng, l.geom_bng) d, ST_LineLocatePoint(l.geom_bng, s.geom_bng) frac
