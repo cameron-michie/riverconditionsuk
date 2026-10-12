@@ -14,12 +14,13 @@ cd web && python3 -m http.server 8000                                           
 ## Layout
 
 ```
-supabase/migrations   schema: ingest, ref, core, research, ops, api (42 migrations)
+supabase/migrations   schema: ingest, ref, core, wx, research, ops, api (63 migrations)
 supabase/seed.sql     the rulebook as data: sources, licences, units, parameters, value maps
 scripts/collect       one fetcher per source -> data/raw (never edited) + manifest.jsonl
 scripts/load          raw -> normalised tables; compute_signals.sql; rebuild_rivers.sh
 web                   index.html + app.js (d3 + canvas). No data: everything comes from Supabase tiles.
-docs                  NORMALISATION.md (data), MAP.md (how the map scales)
+scripts/etl           scheduler, weather, flow model, archive and the incremental adapters
+docs                  NORMALISATION.md (data), MAP.md (map), FLOW_MODEL.md, ACCESS.md (what to request)
 data/raw              3.7 GB of source files (git-ignored)
 ```
 
@@ -49,8 +50,25 @@ Needs Python 3.14 with `httpx pandas>=3 psycopg[binary] shapely osmium websocket
 
 ## Keeping it live
 
-Updating is an ETL concern, never the frontend's. Jobs and intervals live in `ops.etl_job`; `scripts/etl/scheduler.py` runs the due ones (call it every minute from launchd, cron or a container; install with `cp scripts/etl/com.riverconditionsuk.etl.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.riverconditionsuk.etl.plist`). Results are in `ops.etl_run`. The `live` job runs `scripts/load/refresh_live.py`, which brings 'now' up to date (gauge readings, overflow status, flood warnings and outlook, flood index, sewage works). It runs every 15 minutes once the scheduler is installed.
+Updating is an ETL concern, never the frontend's. Jobs and intervals live in `ops.etl_job`. `scripts/etl/scheduler.py` is a tick that starts every due job as its own detached worker, so a slow job never delays a fast one; call it every minute (`cp scripts/etl/com.riverconditionsuk.etl.plist ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.riverconditionsuk.etl.plist`). Jobs use the project venv (`python3 -m venv --system-site-packages .venv && .venv/bin/pip install h5py pillow eccodes scikit-image scipy boto3`), because launchd's PATH finds a Python without the libraries. Results: `ops.etl_run`; health: `select * from ops.job_freshness`.
+
+| job | every | what |
+|---|---|---|
+| `live` | 5 min | EA readings (all stations), EA/SEPA 15-min flow, 11 company overflow feeds, flood warnings, five-day outlook, flood state, flow signals |
+| `dcww_overflows` | 5 min | Welsh Water live overflows (2,362) |
+| `wx_radar` | 15 min | Met Office rain radar to map frames and catchment rain |
+| `sepa_extra` | 15 min | SEPA stage and hourly rainfall |
+| `wx_ifs` | 1 h | ECMWF five-day rain frames, isobars, catchment rain (loads when a new run lands) |
+| `flow_forecast` | 1 h | rain-driven flow forecast for every waterbody and gauge (`docs/FLOW_MODEL.md`) |
+| `epicollect` | 1 h | Wye Alliance and Usk CaSTCo weekly volunteer readings |
+| `ea_hydrology_daily`, `bathing_recent` | 6 h | EA daily flow and rain (7-day window), bathing samples |
+| `ea_wq_recent` | 12 h | EA lab chemistry, rolling 45 days |
+| `archive` | daily | rows past their retention go to Parquet (`ops.retention_rule`), verified before deleting |
+| `flow_normal` | weekly | seasonal normals, rebuilt from the archive plus hot rows |
+| `nrfa_recent` | monthly | NRFA quality-controlled daily flow, straight to the archive |
+
+**Postgres holds now and the next five days.** Observations stay hot for 8 days (15-minute and daily series) or 400 days (lab samples); older rows are archived to `data/archive/` as Parquet laid out like the Storage bucket `archive`, with a ledger in `ops.archive_object`. Forecasts live in `core.forecast` and `core.waterbody_flow`; weather in `wx.*`. Pushing the archive and `web/wx` frames to hosted Supabase Storage is not done yet. Access still to request: `docs/ACCESS.md`.
 
 ## Not built
 
-No agent runtime, no ETL scheduler (`pg_cron` and `pgmq` are enabled but no jobs are scheduled), no auth. The `ops.proposal` table and the rule-based research links are the seam the agents plug into.
+No agent runtime and no auth. The scheduler is an external tick, not `pg_cron` (enabled but unused). The `ops.proposal` table and the rule-based research links are the seam the agents plug into.
