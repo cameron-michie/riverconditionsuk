@@ -7,3 +7,5 @@ supabase_creds.md
 .env
 .env.*
 .DS_Store
+.venv/
+.claude/worktrees/
