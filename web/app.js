@@ -153,7 +153,7 @@ function draw() {
   if (lab.beaches && drawn.beaches) for (const t of drawn.beaches) for (const f of t.polys) if (f.p.n && f.lp && z >= 11) label(f.p.n, f.lp[0] * T.k + T.x, f.lp[1] * T.k + T.y, "italic 11px system-ui", "#8a6d1c");
   if (on.pressure) for (const q of WX.labels) { const x = sx(q), y = sy(q); if (x > 0 && y > 0 && x < W && y < H) label(q.t, x, y + 4, "600 11px system-ui", "#4a4060"); }
   // points, least to most urgent
-  for (const code of ["bridges", "gauges", "bathing", "sewage_works", "overflows"]) {
+  for (const code of ["bridges", "gauges", "citizen", "bathing", "sewage_works", "overflows"]) {
     if (!act(code)) continue; drawn[code] = visible(code, z, bb);
     for (const t of drawn[code]) for (const q of t.pts) { const x = sx(q), y = sy(q); if (x < -20 || y < -20 || x > W + 20 || y > H + 20) continue; symbol(code, q, x, y, z); }
   }
@@ -177,6 +177,8 @@ function symbol(code, q, x, y, z) {
     ctx.fillStyle = ({ excellent: COL[1], good: "#6a9fd0", sufficient: COL[2], poor: COL[4] })[p.cl] || "#bbb"; ctx.strokeStyle = "#fff"; ctx.fillRect(x - 4, y - 4, 8, 8); ctx.strokeRect(x - 4, y - 4, 8, 8);
   } else if (code === "gauges") {                               // gauges: ring coloured by flood band
     const b = p.b | 0; ctx.beginPath(); ctx.arc(x, y, b >= 4 ? 5.2 : b === 3 ? 4.4 : 3.6, 0, 7); ctx.fillStyle = GB[b]; ctx.fill(); ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.4; ctx.stroke();
+  } else if (code === "citizen") {                              // volunteer sites: small dark diamonds, neutral so they never read as a condition
+    ctx.beginPath(); ctx.moveTo(x, y - 4.6); ctx.lineTo(x + 3.8, y); ctx.lineTo(x, y + 4.6); ctx.lineTo(x - 3.8, y); ctx.closePath(); ctx.fillStyle = "#3d3d3d"; ctx.fill(); ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.2; ctx.stroke();
   } else if (code === "bridges") {
     ctx.strokeStyle = "#333"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 5, y); ctx.lineTo(x + 5, y); ctx.stroke(); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x - 4, y - 3); ctx.lineTo(x - 4, y + 3); ctx.moveTo(x + 4, y - 3); ctx.lineTo(x + 4, y + 3); ctx.stroke();
     if (z >= 13) label(p.n, x, y - 8, "11px system-ui", "#333");
@@ -190,7 +192,7 @@ function polyHit(mx, my) {
   ctx.restore(); return r;
 }
 function pick(mx, my) {
-  for (const code of ["overflows", "sewage_works", "gauges", "bathing", "bridges"]) {
+  for (const code of ["overflows", "sewage_works", "gauges", "citizen", "bathing", "bridges"]) {
     if (!drawn[code]) continue; let best = null, bd = 100;
     for (const t of drawn[code]) for (const q of t.pts) { const [x, y] = scr(q), d = (x - mx) ** 2 + (y - my) ** 2; if (d < bd) { bd = d; best = q; } }
     if (best) return { kind: "point", q: best, code };
@@ -218,6 +220,7 @@ const polyLine = h => { const p = h.f.p;
 const pointLine = h => { const p = h.q.p; if (p.c != null) return `${nf(p.c)} ${LAYERS[h.code].label}${p.h ? ", " + p.h + " active" : ""}: click to zoom`;
   if (h.code === "overflows") return `${esc(p.n || "overflow")} · ${p.st === "discharging" ? "discharging now" : p.st === "not_discharging" ? "not discharging" : "monitor " + p.st} · ${esc(p.co || "")}`;
   if (h.code === "sewage_works") return `${esc(p.n || "treatment works")} · treated sewage discharge · effluent ${p.m ? "monitored" : "not monitored"}${p.co ? " · " + esc(p.co) : ""}`;
+  if (h.code === "citizen") return `${esc(p.n)} · volunteer site${p.p != null ? " · phosphate " + p.p + " mg/L as P" : ""}`;
   if (h.code === "gauges") return `${esc(p.n)} · flood index ${BAND[(p.b | 0) - 1] || "unknown"}${p.lv != null ? " · height " + p.lv + " m" : ""}${p.q != null ? " · " + Number(p.q).toPrecision(3) + " m³/s" : ""}`;
   return h.code === "bathing" ? `${esc(p.n)} · ${esc(p.cl || "unclassified")}` : esc(p.n); };
 cv.addEventListener("mousemove", ev => {
@@ -247,7 +250,7 @@ function spark(pts, o = {}) {                                   // tiny dependen
   const band = o.lo != null && o.hi != null ? `<rect x="0" y="${Y(o.hi)}" width="${w}" height="${Math.max(1, Y(o.lo) - Y(o.hi))}" fill="#e8f1f8"/>` : "";
   const max = o.max != null && o.max <= hi * 1.001 && o.max >= lo ? `<line x1="0" x2="${w}" y1="${Y(o.max)}" y2="${Y(o.max)}" stroke="#b3202a" stroke-dasharray="3 3" stroke-width="1"/>` : "";
   return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" role="img" aria-label="${esc(o.label || "chart")}">${band}${max}<polyline fill="none" stroke="#111" stroke-width="1.4" points="${pts.map(q => X(q[0]).toFixed(1) + "," + Y(q[1]).toFixed(1)).join(" ")}"/></svg>
-    <div class="dim" style="display:flex;justify-content:space-between;font-size:11px"><span>7 days ago</span><span>${lo.toPrecision(3)} to ${hi.toPrecision(3)} ${o.unit || ""}</span><span>now</span></div>`;
+    <div class="dim" style="display:flex;justify-content:space-between;font-size:11px"><span>${o.from || "7 days ago"}</span><span>${lo.toPrecision(3)} to ${hi.toPrecision(3)} ${o.unit || ""}</span><span>now</span></div>`;
 }
 const bandBar = b => `<span class="bands">${BAND.map((n, i) => `<i class="${i + 1 === b ? "on" : ""}" style="${i + 1 === b ? "background:" + GB[i + 1] + ";color:" + (i + 1 === 3 ? "#111" : "#fff") : ""}">${n}</i>`).join("")}</span>`;
 const dayName = i => { const d = new Date(); d.setDate(d.getDate() + i); return i === 0 ? "Today" : d.toLocaleDateString("en-GB", { weekday: "short" }); };
@@ -271,6 +274,21 @@ async function showGauge(p, id) {
       ${spark(d.flow, { unit: "m³/s", label: "river flow, last 7 days" })}` : `<div class="dim">No flow measured at this gauge.</div>`}
     ${d.outlook?.days ? `<h2>Flood outlook, ${esc(d.outlook.area)}${tag("regulator_assessment")}</h2><div class="rks">${riskChips(d.outlook.days)}</div>` : ""}
     <div class="dim" style="margin-top:14px">Flood index: height against the gauge's typical range and record high, and flow against the median annual flood. A guide to how unusual the river is, not a flood warning.</div>`;
+}
+const VOL = { phosphorus_reactive: ["Phosphate, as P", "mg/L"], nitrate_n: ["Nitrate, as N", "mg/L"], nitrite_n: ["Nitrite, as N", "mg/L"], ammonia_total_n: ["Ammonia, as N", "mg/L"], conductivity: ["Conductivity", "µS/cm"], turbidity: ["Turbidity", "NTU"], water_temperature: ["Water temperature", "°C"], ph: ["pH", ""] };
+async function showVolunteer(p, id) {
+  const seq = ++panelSeq; panel.style.display = "block"; sel = null; redraw(); doc.innerHTML = `<span class="dim">…</span>`;
+  const d = await rpc("volunteer_dossier", { p_id: id }); if (seq !== panelSeq) return; if (!d || !d.site) { doc.innerHTML = `<span class="dim">no data</span>`; return; }
+  const s = d.site, v = d.visits || {}, n = d.notes || {};
+  const rows = (d.latest || []).filter(x => VOL[x.param]).map(x => `<div class="bar"><span class="n">${VOL[x.param][0]}${x.method === "strip" ? ' <span class="dim">(strip)</span>' : ""}</span><b>${Number(x.v).toPrecision(3)}</b> <span class="dim">${VOL[x.param][1]} · ${day(x.at)}</span></div>`).join("");
+  const ph = d.phosphate || [];
+  doc.innerHTML = `<div class="kick">Volunteer sampling site${s.river ? ` on <a href="#${esc(s.river.slug)}">${esc(s.river.name)}</a>` : ""}</div><h1>${esc(s.name)}</h1>
+    <div class="dim">${esc(s.org || "")}${s.stretch ? ` · <a href="#stretch-${s.stretch.id}">${esc(s.stretch.name)}</a>` : ""}${tag("citizen_science")}</div>
+    <h2>Latest readings</h2>${rows || `<div class="dim">No readings in the last year.</div>`}
+    ${ph.length > 1 ? `<h2>Phosphate, last year</h2>${spark(ph, { unit: "mg/L as P", label: "phosphate, last year", from: "a year ago" })}` : ""}
+    <h2>Visits</h2><div>${nf(v.n || 0)} weekly visits <span class="dim">· ${day(v.first)} to ${day(v.last)}</span></div>
+    ${n["30_Rainfall_in_the_l"] || n.Rainfall ? `<div class="dim">Last visit: ${esc(n["30_Rainfall_in_the_l"] || "")}${n["31_Relative_water_le"] ? " · " + esc(n["31_Relative_water_le"]) : ""}</div>` : ""}
+    <p class="dim" style="margin-top:16px">Measured by trained volunteers with test strips and handheld meters, so values are indicative and are not regulator results. The phosphate checker reads up to 2.5 mg/L as phosphate; readings at that limit are lower bounds. Data: ${esc(s.project === "usk-castco-citizen-science" ? "Usk CaSTCo" : "Wye Alliance")} citizen science (Epicollect5); licence unconfirmed.</p>`;
 }
 async function showWorks(p, id) {
   const seq = ++panelSeq; panel.style.display = "block"; sel = null; redraw(); doc.innerHTML = `<span class="dim">…</span>`;
@@ -307,7 +325,7 @@ const tag = ev => ev && EV[ev] ? `<span class="tag" title="${esc(EV[ev].about)}"
 const lad = (r, si) => { const n = si != null && SIGS[si] ? SIGS[si].words.length : 4; return `<span class="lad ${r ? "" : "none"}" aria-hidden="true">${Array.from({ length: n }, (_, k) => `<i style="${k + 1 <= r ? "background:" + colOf(si ?? 0, r) : ""}"></i>`).join("")}</span>`; };
 function panelNote(p) { panelSeq++; panel.style.display = "block"; sel = null; redraw(); doc.innerHTML = `<h1>${esc(p.n || "Watercourse")}</h1><p class="dim">A watercourse segment that is not part of a classified stretch (tidal, canal, lake or small stream), so there is no condition data for it.</p>${p.r ? `<p><a href="#${esc(p.r)}">Open the whole river →</a></p>` : ""}`; }
 function showPoint(code, p, id) {
-  if (code === "gauges") return showGauge(p, id); if (code === "sewage_works") return showWorks(p, id);
+  if (code === "gauges") return showGauge(p, id); if (code === "sewage_works") return showWorks(p, id); if (code === "citizen") return showVolunteer(p, id);
   panelSeq++; panel.style.display = "block"; const river = p.rv ? `<h2>River</h2><a href="#${esc(p.rv)}">${esc(p.rn)}</a>` : "";
   if (code === "overflows") doc.innerHTML = `<h1>${esc(p.n || "storm overflow")}</h1><div class="dim">${esc(p.co || "")}${tag("company_reported")}</div>
     <div class="kick" style="margin-top:-2px">Storm overflow</div><h2>Now</h2><div class="big">${p.st === "discharging" ? `<b style="color:var(--c4)">Discharging</b>` : p.st === "not_discharging" ? "Not discharging" : "Monitor " + esc(p.st) + " (unknown, not zero)"}</div>
@@ -492,6 +510,7 @@ function legendUI() {
   else row.push(SIGS[sigI].words.map((t, i) => `<span><i style="border-color:${colOf(sigI, i + 1)};border-top-width:${flow ? 3 : 2 + i}px"></i>${esc(t)}</span>`).join("") + `<span><i style="border-color:${COL[0]}"></i>${flow ? "no gauge nearby" : "no data"}</span><span class="dim">width = river size</span>`);
   if (on.gauges) row.push(`<span class="lg"><b>gauges</b>${BAND.map((b, i) => `<span><i class="bgd" style="background:${GB[i + 1]}"></i>${b}</span>`).join("")}</span>`);
   if (on.overflows || on.sewage_works) row.push(`<span class="lg"><b>sewage</b>${on.overflows ? `<span><i class="dot" style="background:${COL[4]}"></i>overflow discharging</span><span><i class="dot" style="background:#cf8b80"></i>monitored</span><span><i class="dot ring"></i>unmonitored</span>` : ""}${on.sewage_works ? `<span><i class="sq" style="background:${SEWAGE}"></i>works, effluent monitored</span><span><i class="sq ring"></i>not monitored</span>` : ""}</span>`);
+  if (on.citizen) row.push(`<span class="lg"><b>volunteers</b><span><i class="sq" style="background:#3d3d3d;transform:rotate(45deg) scale(.8)"></i>weekly sampling site</span><span class="dim">Wye and Usk citizen science</span></span>`);
   if (zonesShown) row.push(`<span class="lg"><b>flood risk</b><span><i class="sq" style="background:rgba(179,32,42,.35);border:1px solid #b3202a"></i>expected flood plain (danger zone)</span></span>`);
   if (on.flood_outlook) row.push(`<span class="lg"><b>flood risk, 5 days</b>${[["#fff", "very low"], ["#e6c53f", "low"], ["#ee8a3c", "medium"], ["#b3202a", "high"]].map(([c, t]) => `<span><i class="sq" style="background:${c};border:1px solid #bbb"></i>${t}</span>`).join("")}</span>`);
   if (on.rain && WX.d?.rain) { const r = WX.d.rain; row.push(`<span class="lg"><b>rain</b>${RAIN.map(([c, t]) => `<span><i class="sq" style="background:${c}"></i>${t}</span>`).join("")}<span>mm/h</span><span class="dim">${esc(r.source)} · ${wxt(r.valid_at)} · ${r.kind === "radar" ? "Contains Met Office data © Crown copyright" : "Contains ECMWF open data"}</span></span>`); }
