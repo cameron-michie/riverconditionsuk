@@ -9,3 +9,5 @@ supabase_creds.md
 .DS_Store
 .venv/
 .claude/worktrees/
+web/wx/
+data/
