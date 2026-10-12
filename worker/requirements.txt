@@ -1,0 +1,5 @@
+numpy>=2
+rasterio>=1.4
+shapely>=2
+httpx>=0.27
+psycopg[binary]>=3.2
