@@ -17,22 +17,22 @@ The data is not the moat; reconciling it is. This documents what the sources act
 | **Everything is a string** | The EA annual returns hold counts, hours and percentages as text, and also a `_calculated` twin. | Prefer the `_calculated` numeric where present; keep raw strings in `qualifiers`. |
 | **Time** | Lab times are local (Europe/London, naive); feeds are UTC; NRFA daily means are dates; hydrology daily readings are stamped 09:00. | Everything stored `timestamptz` UTC. Naive local times are localised with DST handling. Daily series store the period *start* with `interval_s=86400`. |
 | **Categorical vocabularies** | WFD status is `High/Good/Moderate/Poor/Bad` for ecology but `Pass/Fail` for chemistry and `Supports Good` for hydrology. Overflow status is `1/0/-1` for England and `13/14/15/16` for Scotland. | `ref.value_map(domain, source, native -> canonical, rank)`. Ordinal rank only where one exists; pass/fail is never forced onto a 1–5 scale. |
-| **Evidence is not equal** | A sonde reading, a company's self-reported spill count, a SEPARATE model share and a Big River Watch "murky" answer are different things. | `core.evidence_class` on every series, signal and survey, carried through to the API and shown beside every figure in the UI. Official, company, regulator, modelled, citizen and research are never merged into one number. |
-| **Same fact, two vintages** | WFD classification: cycles 1–3 (2009–2022) in the CDE CSV, cycle 4 (2025) only via CaSTCo; Wales has cycle 3 only. | `core.waterbody_classification` keys on `(waterbody, cycle, year, element, source)`; "current" is the latest cycle; trend compares to the prior cycle. |
-| **Silent upstream breakage** | The EA water-quality API was retired in Dec 2025 and rebuilt in Feb 2026 (new paths, JSON-LD capped at 250 rows, CSV at 2,500). EA hosts 403 bursts. | `ingest.source.contract` + `ingest.run` for drift detection; per-host rate limiting in the collectors; `ops.source_health` shows which source went quiet. |
+| **Evidence is not equal** | A sonde reading, a company's self-reported spill count, a SEPARATE model share and a Big River Watch "murky" answer are different things. | An evidence class on every series, signal and survey, carried through to the API and shown beside every figure in the UI. Official, company, regulator, modelled, citizen and research are never merged into one number. |
+| **Same fact, two vintages** | WFD classification: cycles 1–3 (2009–2022) in the CDE CSV, cycle 4 (2025) only via CaSTCo; Wales has cycle 3 only. | Loaders read every cycle and keep, per waterbody and element, the latest rated assessment and the cycle before it (`geo.waterbody.classes`); trend compares the two. |
+| **Silent upstream breakage** | The EA water-quality API was retired in Dec 2025 and rebuilt in Feb 2026 (new paths, JSON-LD capped at 250 rows, CSV at 2,500). EA hosts 403 bursts. | Per-host rate limiting in the collectors; every job run in `ops.etl_run` with its source and row count; `ops.job_freshness` shows which job went quiet. |
 
 ## 2. The ladder
 
 ```
-raw         data/raw/** + ingest.raw_object (sha256, url, licence)      never edited
-stage       per-source adapters: parse, type, reject with reason        ingest.reject
+raw         data/raw/** + data/raw/manifest.jsonl (sha256, url, licence)  never edited
+stage       per-source adapters: parse, type, skip with a count in the run log
 resolve     identity (site), place (river/waterbody), meaning (param/unit/value map)
-canonical   core.*  one row per real-world thing, one unit, UTC, evidence_class
-derive      core.signal (five named sub-signals, rule in `basis`), rollups
-publish     api.* views + RPC; the only schema exposed
+canonical   geo.* (places) and live.* (current state, 7 days of readings): one row per real-world thing, one unit, UTC, evidence class
+derive      live.signal (named sub-signals, rule in `basis`), rollups
+publish     api.* functions; the only schema exposed
 ```
 
-**Identity ladder for sites**, cheapest and surest first: (1) exact shared id; (2) official crosswalk table; (3) composite key; (4) spatial proximity + same kind + same river; (5) name similarity (`pg_trgm`); (6) agent proposal into `ops.proposal`, human yes/no. Rungs 1–3 are in. Rungs 4–6 write to `core.site_match` with the features that justified them, and every merge is reversible (`merged_into`, never a delete).
+**Identity ladder for sites**, cheapest and surest first: (1) exact shared id; (2) official crosswalk table; (3) composite key; (4) spatial proximity + same kind + same river; (5) name similarity (`pg_trgm`); (6) agent proposal, human yes/no. Rungs 1–3 are in; 4–6 are not built.
 
 ## 3. What is deterministic and what an agent may touch
 
@@ -62,7 +62,7 @@ publish     api.* views + RPC; the only schema exposed
 - **Not available, so worked around:** TimescaleDB. Observations use native range partitions (yearly to 2019, monthly after) with BRIN on time and a `(series_id, observed_at)` primary key, plus `observation_latest` and `observation_daily` rollups.
 - **Adapters (light):** API pulls fit a small scheduled worker. They need a per-host rate limiter, retry on 403/429/5xx and non-JSON bodies, and idempotent upserts keyed on `(source_id, source_series_key)`.
 - **Heavy jobs outside Supabase workers:** the 533MB WFD CSV, satellite scenes and bulk PDF extraction want batch compute that can run for an hour and hold GBs (a container job on Fly/Modal/Cloud Run, or a GitHub Actions runner), writing to Postgres through the same loaders. Park Parquet + DuckDB in front of any backfill larger than a few GB.
-- **Map delivery:** the prototype ships simplified GeoJSON (7MB) plus live annotation calls. For the planned MapLibre build, generate PMTiles from `core.waterbody`/`core.river_link` and serve from object storage; keep point layers on the API.
+- **Map delivery:** the prototype ships simplified GeoJSON (7MB) plus live annotation calls. For the planned MapLibre build, generate PMTiles from `geo.waterbody`/`geo.river_link` and serve from object storage; keep point layers on the API.
 - **Honest limits:** `pg_cron` and `pgmq` are available locally; confirm hosted limits before depending on them for the heavy jobs.
 
 ## 6. Decisions that need a human

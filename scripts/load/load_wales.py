@@ -35,7 +35,7 @@ with connect() as conn, conn.cursor() as cur:
     cur.execute("create temp table stg_vm (native text, canonical text) on commit drop")
     copy_rows(cur, "stg_vm", ["native", "canonical"], [(k, v[0]) for k, v in VM.items()])
     cur.execute("""create temp table stg_cls on commit drop as
-        select w.id waterbody_id, 3::smallint cycle, 2021::smallint year, s.el element, coalesce(v.canonical, 'not_assessed') status, s.cert certainty
+        select w.id waterbody_id, 3::smallint as cycle, 2021::smallint as year, s.el element, coalesce(v.canonical, 'not_assessed') status, s.cert certainty
         from stg_cl s join geo.waterbody w on w.wb_code = s.wb left join stg_vm v on v.native = lower(s.st)""")
     # SAC river phosphorus compliance (official target assessment) as its own element
     cur.execute("""insert into ref.term (domain, code, label, attrs) values ('wfd_element', 'sac_phosphorus', 'SAC river phosphorus target compliance',

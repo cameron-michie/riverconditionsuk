@@ -1,6 +1,6 @@
 """Citizen-science surveys (last 36 months), bathing-water samples, EA flood warning areas and warnings in force, determinand catalogue, nutrient neutrality catchments.
 Research papers are linked to rivers by link_research.py, straight from the OpenAlex download."""
-import json, os, re, time, datetime as dt, collections
+import json, os, re, sys, time, datetime as dt, collections
 from db import *
 t0 = time.time()
 def feats(p): return json.load(open(os.path.join(RAW, p)))["features"]

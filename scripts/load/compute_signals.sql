@@ -6,7 +6,7 @@ insert into st_rank values ('high',1,'good'),('good',1,'good'),('moderate',2,'mo
 
 -- current + previous rated classification per element, as folded onto geo.waterbody.classes by the loaders
 create temp table cls as
-select w.id waterbody_id, c.key element_code, (c.value->>'cycle')::int cycle, (c.value->>'year')::int year, c.value->>'status' status,
+select w.id waterbody_id, c.key element_code, (c.value->>'cycle')::int as cycle, (c.value->>'year')::int as year, c.value->>'status' status,
        (c.value->>'rank')::smallint status_rank, (c.value->>'prev_rank')::smallint prev_rank
 from geo.waterbody w cross join lateral jsonb_each(w.classes) c where c.value ? 'rank';
 create index on cls (waterbody_id);

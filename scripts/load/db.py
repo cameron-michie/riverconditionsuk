@@ -54,7 +54,7 @@ def fold_classes(cur, stg):
       create temp table _fc on commit drop as
       with staged as (select distinct on (waterbody_id, element, cycle) waterbody_id, element, cycle, year, status, certainty from {stg}
                       order by waterbody_id, element, cycle, year desc),
-      held as (select w.id waterbody_id, c.key element, (c.value->>'cycle')::int cycle, (c.value->>'year')::int year, c.value->>'status' status, c.value->>'certainty' certainty
+      held as (select w.id waterbody_id, c.key element, (c.value->>'cycle')::int as cycle, (c.value->>'year')::int as year, c.value->>'status' status, c.value->>'certainty' certainty
                from geo.waterbody w cross join lateral jsonb_each(w.classes) c where w.id in (select waterbody_id from {stg})
                union all
                select w.id, c.key, null, null, c.value->>'prev', null from geo.waterbody w cross join lateral jsonb_each(w.classes) c

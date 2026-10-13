@@ -814,7 +814,7 @@ near as (
     and s.latest_at is not null and (s.latest_value is not null or s.latest_censor is not null)
   order by p.code, s.latest_at desc),
 cls as (
-  select e.code, e.label, c.value->>'status' status, (c.value->>'year')::int year, (c.value->>'cycle')::int cycle, c.value->>'certainty' certainty, c.value->>'prev' prev_status
+  select e.code, e.label, c.value->>'status' as status, (c.value->>'year')::int as year, (c.value->>'cycle')::int as cycle, c.value->>'certainty' as certainty, c.value->>'prev' as prev_status
   from w cross join jsonb_each(w.classes) c join ref.term e on e.domain = 'wfd_element' and e.code = c.key
   where e.code in ('overall','ecological','chemical','phosphate','ammonia','dissolved_oxygen','ph','temperature','fish','invertebrates','macrophytes_phytobenthos','sac_phosphorus')),
 ov as (
@@ -1285,6 +1285,7 @@ CREATE OR REPLACE FUNCTION ops.cron_expr (
     when p_minutes < 1440 and p_minutes % 60 = 0 then (abs(hashtext(p_name)) % 60)::text || ' */' || (p_minutes / 60) || ' * * *'
     when p_minutes = 1440 then (abs(hashtext(p_name)) % 60)::text || ' ' || (2 + abs(hashtext(p_name)) % 3)::text || ' * * *'
     when p_minutes = 10080 then (abs(hashtext(p_name)) % 60)::text || ' 3 * * 0'
+    when p_minutes >= 129600 then (abs(hashtext(p_name)) % 60)::text || ' 4 1 */3 *'
     else (abs(hashtext(p_name)) % 60)::text || ' 4 1 * *' end
 $function$;
 
