@@ -58,6 +58,7 @@ Updating is an ETL concern, never the frontend's. Jobs and intervals live in `op
 | `dcww_overflows` | 5 min | Welsh Water live overflows (2,362) |
 | `wx_radar` | 15 min | Met Office rain radar to map frames and catchment rain |
 | `sepa_extra` | 15 min | SEPA stage and hourly rainfall |
+| `nrw_telemetry` | 15 min | NRW open telemetry: Welsh river levels and rain gauges (no key needed) |
 | `wx_ifs` | 1 h | ECMWF five-day rain frames, isobars, catchment rain (loads when a new run lands) |
 | `flow_forecast` | 1 h | rain-driven flow forecast for every waterbody and gauge (`docs/FLOW_MODEL.md`) |
 | `epicollect` | 1 h | Wye Alliance and Usk CaSTCo weekly volunteer readings |
