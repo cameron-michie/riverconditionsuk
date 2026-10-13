@@ -1,6 +1,7 @@
 """NRW Rivers and Seas API (key in .env, NRW_RIVERS_SEAS_KEY): a year of 15-minute river level and rainfall for ~400 Welsh stations.
   nrw_historical.py            backfill: last 8 days -> Postgres, everything older -> Parquet archive (once; refuses to run twice)
   nrw_historical.py --days N   gap fill: last N days -> Postgres only (use after an outage)
+  nrw_historical.py --gaps     scheduled daily: only series whose newest reading is over 3 h old, last 3 days -> Postgres (usually none, so it makes few calls)
 Stations are the same gauges as the open telemetry API, with coordinates that differ by ~90 m, so they are matched by position (<= 400 m) and kind."""
 import concurrent.futures as cf, datetime as dt, hashlib, json, math, os, sys
 os.environ.setdefault("MIN_GAP", "7")      # the key allows ~10 calls then answers 429; one call per 7 s stays under it
@@ -14,7 +15,8 @@ for line in open(os.path.join(lib.ROOT, "..", "..", ".env")):
 H = {"Ocp-Apim-Subscription-Key": os.environ["NRW_RIVERS_SEAS_KEY"]}; B = "https://api.naturalresources.wales/rivers-and-seas/v1/api/"
 ARCH = os.path.abspath(os.path.join(lib.ROOT, "..", "archive"))
 KIND = {"River Level": ("water_level", "river_gauge", "instant"), "Rainfall": ("rainfall", "rain_gauge", "sum")}
-days = int(sys.argv[sys.argv.index("--days") + 1]) if "--days" in sys.argv else None
+GAPS = "--gaps" in sys.argv
+days = int(sys.argv[sys.argv.index("--days") + 1]) if "--days" in sys.argv else (3 if GAPS else None)
 now = dt.datetime.now(dt.timezone.utc); hot_from = now - dt.timedelta(days=days or 8)
 SCHEMA = pa.schema([("series_id", pa.int64()), ("observed_at", pa.timestamp("us", tz="UTC")), ("value", pa.float64()), ("censor", pa.string()), ("detection_limit", pa.float64()),
                     ("value_raw", pa.string()), ("quality", pa.string()), ("completeness", pa.float32()), ("sample_id", pa.int64())])
@@ -55,6 +57,9 @@ with connect() as conn, conn.cursor() as cur:
                 if code == "rainfall": cur.execute("update core.series set unit_id = 'mm' where id = %s", (x[0],))
                 SERIES[key] = x[0]
             jobs.append((loc, p["parameter"], SERIES[key]))
+    if GAPS:
+        cur.execute("select series_id, observed_at from core.observation_latest where series_id = any(%s)", ([j[2] for j in jobs],)); newest = dict(cur.fetchall())
+        jobs = [j for j in jobs if j[2] not in newest or newest[j[2]] < now - dt.timedelta(hours=3)]
     conn.commit(); print(len(stations), "stations,", len(jobs), "series to fetch", flush=True)
 
     def fetch(j):
