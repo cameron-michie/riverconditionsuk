@@ -7,8 +7,9 @@ import datetime as dt, hashlib, os, sys, time
 sys.path[:0] = [os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."), os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "load")]
 import pyarrow as pa, pyarrow.parquet as pq
 from db import connect
+import store
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "archive"))
+ROOT = store.ARCH_DIR; STORE = store.archive()      # local folder, or /tmp scratch with Supabase Storage as the real home
 DRY = "--dry-run" in sys.argv
 ONLY = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
 CLASS = {"observation:fast": "se.interval_s is not null and se.interval_s < 86400", "observation:daily": "se.interval_s = 86400",
@@ -33,14 +34,17 @@ def archive_unit(conn, cur, dataset, label, rel, select_sql, delete_sql, params,
     cur.execute(select_sql, params); rows = cur.fetchall()
     if not rows: return
     path = os.path.join(ROOT, rel)
-    if os.path.exists(path): rel = rel.replace(".parquet", f"-late{int(time.time())}.parquet"); path = os.path.join(ROOT, rel)
+    cur.execute("select 1 from ops.archive_object where bucket = 'archive' and path = %s", (rel,))
+    if os.path.exists(path) or cur.fetchone(): rel = rel.replace(".parquet", f"-late{int(time.time())}.parquet"); path = os.path.join(ROOT, rel)
     if DRY: print(f"  would archive {len(rows):>9} rows -> {rel}"); totals["rows"] += len(rows); return
     n, size, sha = write_parquet(path, rows, schema, cols)
     if n != len(rows): raise RuntimeError(f"verify failed for {rel}: wrote {n}, read {len(rows)}")
+    STORE.put(rel, path)                                    # safe in the bucket before a single row is deleted
     cur.execute("insert into ops.archive_object (dataset, period_start, period_end, path, rows, bytes, sha256, dropped_at) values (%s,%s,%s,%s,%s,%s,%s, now())", (dataset, start, end, rel, n, size, sha))
     cur.execute(delete_sql, params)
     if cur.rowcount != n: conn.rollback(); os.remove(path); raise RuntimeError(f"delete removed {cur.rowcount} rows but {n} were archived ({rel}); rolled back")
     conn.commit(); totals["files"] += 1; totals["rows"] += n
+    if STORE.hosted: os.remove(path)
     print(f"  {dataset} {label}: {n:>9} rows, {size / 1e6:6.1f} MB -> {rel}", flush=True)
 
 def periods(cutoff, first):
@@ -87,7 +91,7 @@ with connect() as conn, conn.cursor() as cur:
                        from core.series se join ingest.source src on src.id = se.source_id join core.site s on s.id = se.site_id join ref.parameter p on p.id = se.parameter_id""")
         rows = cur.fetchall(); names = ["series_id", "source", "site_id", "site_name", "site_kind", "lon", "lat", "parameter", "unit", "aggregation", "interval_s", "source_series_key", "qualifier"]
         os.makedirs(os.path.join(ROOT, "dim"), exist_ok=True)
-        pq.write_table(pa.table({n: [r[i] for r in rows] for i, n in enumerate(names)}), os.path.join(ROOT, "dim", f"series_{now:%Y%m%d}.parquet"), compression="zstd")
+        dim = os.path.join(ROOT, "dim", f"series_{now:%Y%m%d}.parquet"); pq.write_table(pa.table({n: [r[i] for r in rows] for i, n in enumerate(names)}), dim, compression="zstd"); STORE.put(f"dim/series_{now:%Y%m%d}.parquet", dim)
     print(f"{'would archive' if DRY else 'archived'} {totals['rows']:,} rows in {totals['files']} files")
 if not DRY and totals["rows"]:
     c = connect(); c.autocommit = True

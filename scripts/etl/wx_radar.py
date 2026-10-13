@@ -6,6 +6,8 @@ import h5py, numpy as np
 from PIL import Image
 import lib, wxlib
 from db import connect, copy_rows, source_id, start_run, finish_run
+import store
+WS = store.weather()
 
 BUCKET = "https://met-office-radar-obs-data.s3.eu-west-2.amazonaws.com"
 KEEP_FRAMES_H = 3
@@ -46,7 +48,8 @@ with connect() as conn, conn.cursor() as cur:
         rate[rate < 0] = np.nan      # nodata (outside radar cover)
         if need_f:
             img = np.full(LON.shape, np.nan, dtype="float32"); img[INSIDE] = rate[CY[INSIDE], CX[INSIDE]]
-            name = f"radar_{t:%Y%m%d%H%M}.png"; Image.fromarray(wxlib.rain_rgba(img), "RGBA").save(os.path.join(wxlib.WX_DIR, "radar", name), optimize=True)
+            name = f"radar_{t:%Y%m%d%H%M}.png"; fp = os.path.join(wxlib.WX_DIR, "radar", name); Image.fromarray(wxlib.rain_rgba(img), "RGBA").save(fp, optimize=True); WS.put(f"wx/radar/{name}", fp)
+            if WS.hosted: os.remove(fp)
             cur.execute("""insert into wx.frame (product, issued_at, valid_at, storage_path, bbox, legend) values ('radar_rain', %s, %s, %s, %s, %s)
                            on conflict do nothing""", (t, t, f"wx/radar/{name}", list(wxlib.BBOX), '{"unit":"mm/h","stops":%s}' % list(wxlib.RAIN_STOPS))); frames += 1
         if need_c:
@@ -61,7 +64,6 @@ with connect() as conn, conn.cursor() as cur:
     # expire old frames (image files and rows)
     cur.execute("delete from wx.frame where product = 'radar_rain' and valid_at < now() - make_interval(hours => %s) returning storage_path", (KEEP_FRAMES_H,))
     for (p,) in cur.fetchall():
-        try: os.remove(os.path.join(wxlib.WX_DIR, "..", p))
-        except FileNotFoundError: pass
+        WS.delete(p)
     finish_run(cur, run, written=frames + rain); conn.commit()
     print(f"radar: {frames} new frames, {rain} catchment values")

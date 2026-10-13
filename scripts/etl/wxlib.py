@@ -4,7 +4,8 @@ import numpy as np
 from pyproj import Transformer
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-WX_DIR = os.path.join(ROOT, "web", "wx")        # served beside the map; moves to the Storage 'weather' bucket when hosted
+HOSTED = bool(os.environ.get("STORAGE_URL") and os.environ.get("STORAGE_KEY"))
+WX_DIR = "/tmp/wx" if HOSTED else os.path.join(ROOT, "web", "wx")        # scratch when hosted (frames live in the public Storage bucket 'weather'); beside the page locally
 
 # Radar composite: 1 km OSGB-style transverse Mercator, origin upper left (ODIM attributes of the 2026 files).
 RADAR_PROJ = "+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.999601 +x_0=400000 +y_0=-100000 +ellps=airy +units=m"

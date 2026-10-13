@@ -6,13 +6,14 @@ sys.path[:0] = [os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."), 
 import numpy as np, pandas as pd, pyarrow.dataset as ds
 from db import connect
 
-ARCH = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "archive", "observation", "daily"))
+import store
+ARCH = os.path.join(store.ARCH_DIR, "observation", "daily")
 CHECK = "--check" in sys.argv
 with connect() as conn, conn.cursor() as cur:
     cur.execute("""select se.id, se.site_id, src.slug = 'nrfa' from core.series se join ref.parameter p on p.id = se.parameter_id and p.code = 'river_flow'
                    join ingest.source src on src.id = se.source_id and src.slug in ('nrfa', 'ea_hydrology') where se.aggregation = 'mean' and se.interval_s = 86400""")
     S = pd.DataFrame(cur.fetchall(), columns=["series_id", "site_id", "nrfa"])
-    parts = []
+    store.fetch_archive(cur, "observation:daily"); parts = []
     if glob.glob(os.path.join(ARCH, "**", "*.parquet"), recursive=True):
         t = ds.dataset(ARCH, format="parquet", partitioning="hive").to_table(columns=["series_id", "observed_at", "value"], filter=ds.field("series_id").isin(S.series_id.tolist()))
         parts.append(t.to_pandas())

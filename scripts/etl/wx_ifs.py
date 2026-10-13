@@ -11,6 +11,8 @@ from shapely.geometry import MultiLineString
 from skimage.measure import find_contours
 import lib, wxlib
 from db import connect, copy_rows, start_run, finish_run
+import store
+WS = store.weather()
 
 BASE = "https://data.ecmwf.int/forecasts"
 STEP, LAST = 3, 120
@@ -58,7 +60,7 @@ os.makedirs(os.path.join(wxlib.WX_DIR, "ifs"), exist_ok=True)
 run = newest_complete_run()
 with connect() as conn, conn.cursor() as cur:
     cur.execute("select 1 from wx.frame where product = 'ifs_rain' and issued_at = %s limit 1", (run,))
-    if cur.fetchone(): print("IFS", run, "already loaded"); raise SystemExit
+    if cur.fetchone(): print("IFS", run, "already loaded", flush=True); os._exit(0)      # eccodes aborts in interpreter teardown on Linux (double free); leave directly
     rid = start_run(cur, "ecmwf_ifs", "wx_ifs", {"run": run.isoformat()})
     cur.execute("select id, ST_X(ST_PointOnSurface(catchment_geom)), ST_Y(ST_PointOnSurface(catchment_geom)) from core.waterbody where catchment_geom is not null"); CT = np.array(cur.fetchall())
     LON, LAT = wxlib.image_grid(); prev = None; nf = ncont = 0; crows = []
@@ -80,7 +82,8 @@ with connect() as conn, conn.cursor() as cur:
         if prev is not None:
             rate = np.clip(tp - prev, 0, None) / STEP
             img = sample(rate, tl, tla, LON, LAT); inside = (LON >= tl[0]) & (LON <= tl[-1]) & (LAT >= tla[-1]) & (LAT <= tla[0]); img = np.where(inside, img, np.nan)
-            name = f"ifs_{run:%Y%m%d%H}_{step:03d}.png"; Image.fromarray(wxlib.rain_rgba(img), "RGBA").save(os.path.join(wxlib.WX_DIR, "ifs", name), optimize=True)
+            name = f"ifs_{run:%Y%m%d%H}_{step:03d}.png"; fp = os.path.join(wxlib.WX_DIR, "ifs", name); Image.fromarray(wxlib.rain_rgba(img), "RGBA").save(fp, optimize=True); WS.put(f"wx/ifs/{name}", fp)
+            if WS.hosted: os.remove(fp)
             cur.execute("insert into wx.frame (product, issued_at, valid_at, storage_path, bbox, legend) values ('ifs_rain', %s, %s, %s, %s, %s) on conflict do nothing",
                         (run, valid, f"wx/ifs/{name}", list(wxlib.BBOX), '{"unit":"mm/h","stops":%s,"step_h":%d}' % (list(wxlib.RAIN_STOPS), STEP))); nf += 1
             mm = sample(rate, tl, tla, CT[:, 1], CT[:, 2]) * STEP
@@ -93,8 +96,8 @@ with connect() as conn, conn.cursor() as cur:
     cur.execute("delete from wx.contour where product = 'ifs_mslp' and issued_at < %s", (run,))
     cur.execute("delete from wx.frame where product = 'ifs_rain' and issued_at < %s returning storage_path", (run,))
     for (p,) in cur.fetchall():
-        try: os.remove(os.path.join(wxlib.WX_DIR, "..", p))
-        except FileNotFoundError: pass
+        WS.delete(p)
     cur.execute("""delete from wx.catchment_rain where source = 'ifs' and issued_at < (select min(i) from (select distinct issued_at i from wx.catchment_rain where source = 'ifs' order by 1 desc limit 2) x)""")
     finish_run(cur, rid, written=nf + nc + ncont); conn.commit()
     print(f"IFS {run:%Y-%m-%d %Hz}: {nf} rain frames, {ncont} isobars, {nc} catchment values")
+    sys.stdout.flush(); os._exit(0)

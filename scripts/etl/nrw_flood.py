@@ -4,7 +4,8 @@ import datetime as dt, json, os, sys
 import common, lib
 from db import connect, source_id, start_run, finish_run
 
-for line in open(os.path.join(lib.ROOT, "..", "..", ".env")):
+_env = os.path.join(lib.ROOT, "..", "..", ".env")
+for line in (open(_env) if os.path.exists(_env) else []):      # on compute the keys arrive as environment variables instead
     if "=" in line and not line.startswith("#"): k, v = line.strip().split("=", 1); os.environ.setdefault(k, v)
 B = "https://api.naturalresources.wales/"
 FEEDS = [("nrw_flood_warnings", "floodwarnings/v3/all", "NRW_FLOOD_WARNINGS_KEY", lambda j: len(j.get("features", []))),

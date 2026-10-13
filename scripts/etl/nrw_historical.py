@@ -10,10 +10,12 @@ from common import upsert_obs
 from db import connect, source_id, start_run, finish_run
 import pyarrow as pa, pyarrow.parquet as pq
 
-for line in open(os.path.join(lib.ROOT, "..", "..", ".env")):
+_env = os.path.join(lib.ROOT, "..", "..", ".env")
+for line in (open(_env) if os.path.exists(_env) else []):      # on compute the keys arrive as environment variables instead
     if "=" in line and not line.startswith("#"): k, v = line.strip().split("=", 1); os.environ.setdefault(k, v)
 H = {"Ocp-Apim-Subscription-Key": os.environ["NRW_RIVERS_SEAS_KEY"]}; B = "https://api.naturalresources.wales/rivers-and-seas/v1/api/"
-ARCH = os.path.abspath(os.path.join(lib.ROOT, "..", "archive"))
+import store
+ARCH = store.ARCH_DIR; STORE = store.archive()
 KIND = {"River Level": ("water_level", "river_gauge", "instant"), "Rainfall": ("rainfall", "rain_gauge", "sum")}
 GAPS = "--gaps" in sys.argv
 days = int(sys.argv[sys.argv.index("--days") + 1]) if "--days" in sys.argv else (3 if GAPS else None)
@@ -89,7 +91,7 @@ with connect() as conn, conn.cursor() as cur:
             t = pa.table({"series_id": pa.array(cols[0], pa.int64()), "observed_at": pa.array(cols[1], pa.timestamp("us", tz="UTC")), "value": pa.array(cols[2], pa.float64()),
                           "censor": pa.nulls(len(rs), pa.string()), "detection_limit": pa.nulls(len(rs), pa.float64()), "value_raw": pa.nulls(len(rs), pa.string()),
                           "quality": pa.array(["unchecked"] * len(rs), pa.string()), "completeness": pa.nulls(len(rs), pa.float32()), "sample_id": pa.nulls(len(rs), pa.int64())}, schema=SCHEMA)
-            pq.write_table(t, path, compression="zstd"); n = pq.read_metadata(path).num_rows; assert n == len(rs)
+            pq.write_table(t, path, compression="zstd"); n = pq.read_metadata(path).num_rows; assert n == len(rs); STORE.put(rel, path)
             cur.execute("""insert into ops.archive_object (dataset, period_start, period_end, path, rows, bytes, sha256, dropped_at) values ('observation:fast', %s, %s, %s, %s, %s, %s, now())
                            on conflict (bucket, path) do update set rows = excluded.rows, bytes = excluded.bytes, sha256 = excluded.sha256""",
                         (dt.datetime(y, m, 1, tzinfo=dt.timezone.utc), (dt.datetime(y, m, 28, tzinfo=dt.timezone.utc) + dt.timedelta(days=5)).replace(day=1), rel, n, os.path.getsize(path), hashlib.sha256(open(path, "rb").read()).hexdigest()))
