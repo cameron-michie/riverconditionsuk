@@ -21,15 +21,15 @@ def cells(bb, step=0.25):
         while y < bb[3]: yield (x, y, min(x + step, bb[2]), min(y + step, bb[3])); y += step
         x += step
 with connect() as conn, conn.cursor() as cur:
-    src = source_id(cur, "ea_flood_zones"); cur.execute("truncate core.flood_zone")
+    src = source_id(cur, "ea_flood_zones"); cur.execute("delete from geo.area where kind = 'flood_zone'")
     targets = []
-    cur.execute("""select a.code, a.name, w.severity_level, ST_XMin(a.geom_active), ST_YMin(a.geom_active), ST_XMax(a.geom_active), ST_YMax(a.geom_active), ST_AsText(a.geom_active)
-                   from core.flood_area a join lateral (select * from core.flood_warning w where w.area_id = a.id order by w.changed_at desc nulls last limit 1) w on w.severity_level < 4 where a.geom_active is not null""")
+    cur.execute("""select a.code, a.name, w.severity, ST_XMin(a.geom), ST_YMin(a.geom), ST_XMax(a.geom), ST_YMax(a.geom), ST_AsText(a.geom)
+                   from geo.area a join live.flood w on w.kind = 'warning' and w.area_id = a.id and w.severity < 4 where a.kind = 'warning_area' and a.geom is not null""")
     for code, name, sv, x0, y0, x1, y1, wkt in cur.fetchall():
         targets.append(("warning", code, f"{({1: 'Severe flood warning', 2: 'Flood warning', 3: 'Flood alert'}).get(sv, 'Flood alert')}: {name}", (x0, y0, x1, y1), wkt))
-    cur.execute("""select s.id, s.name, g.band, coalesce(ST_XMin(w.line_geom), ST_X(s.geom) - .05), coalesce(ST_YMin(w.line_geom), ST_Y(s.geom) - .05), coalesce(ST_XMax(w.line_geom), ST_X(s.geom) + .05), coalesce(ST_YMax(w.line_geom), ST_Y(s.geom) + .05),
+    cur.execute("""select s.id, s.name, g.state, coalesce(ST_XMin(w.line_geom), ST_X(s.geom) - .05), coalesce(ST_YMin(w.line_geom), ST_Y(s.geom) - .05), coalesce(ST_XMax(w.line_geom), ST_X(s.geom) + .05), coalesce(ST_YMax(w.line_geom), ST_Y(s.geom) + .05),
                           ST_AsText(ST_Buffer(coalesce(w.line_geom, s.geom), 0.03))
-                   from core.gauge_state g join core.site s on s.id = g.site_id left join core.waterbody w on w.id = s.waterbody_id where g.band_rank >= 4 and s.geom is not null and ST_X(s.geom) between -6.5 and 2""")
+                   from live.site_now g join geo.site s on s.id = g.site_id left join geo.waterbody w on w.id = s.waterbody_id where g.kind = 'gauge' and g.rank >= 4 and s.geom is not null and ST_X(s.geom) between -6.5 and 2""")
     for sid, name, band, x0, y0, x1, y1, wkt in cur.fetchall():
         targets.append(("gauge", str(sid), f"{name}: river {band}", (x0 - .03, y0 - .03, x1 + .03, y1 + .03), wkt))
     print("risk areas:", len(targets), [(t[0], t[2][:50]) for t in targets][:6])
@@ -43,11 +43,12 @@ with connect() as conn, conn.cursor() as cur:
         if not rows: continue
         cur.execute("create temp table if not exists stg_z (zone text, g text, wkt text) on commit drop"); cur.execute("truncate stg_z")
         copy_rows(cur, "stg_z", ["zone", "g", "wkt"], ((z, g, wkt) for z, g in rows))
-        cur.execute("""insert into core.flood_zone (zone, geom, trigger, reason, ref, source_id)
-            select zone, ST_Multi(ST_CollectionExtract(ST_MakeValid(ST_Intersection(ST_MakeValid(zg), ST_GeomFromText(%s, 4326))), 3)), %s, %s, %s, %s
+        cur.execute("""insert into geo.area (kind, geom, attrs, source_id)
+            select 'flood_zone', ST_Multi(ST_CollectionExtract(ST_MakeValid(ST_Intersection(ST_MakeValid(zg), ST_GeomFromText(%s, 4326))), 3)),
+                   jsonb_build_object('zone', zone, 'trigger', %s::text, 'reason', %s::text, 'ref', %s::text, 'fetched_at', now()), %s
             from (select zone, ST_SetSRID(ST_GeomFromGeoJSON(g), 4326) zg from stg_z) q
             where ST_Intersects(ST_MakeValid(zg), ST_GeomFromText(%s, 4326))""", (wkt, trig, reason, ref, src, wkt)); n += len(rows)
-        cur.execute("delete from core.flood_zone where ST_IsEmpty(geom)")
-    cur.execute("select trigger, zone, count(*), round((sum(ST_Area(ST_Transform(geom, 27700))) / 1e6)::numeric, 1) from core.flood_zone group by 1, 2 order by 1, 2"); print("flood zone polygons (trigger, zone, n, km2):", cur.fetchall())
-    cur.execute("analyze core.flood_zone"); conn.commit()
+        cur.execute("delete from geo.area where kind = 'flood_zone' and ST_IsEmpty(geom)")
+    cur.execute("select attrs->>'trigger', attrs->>'zone', count(*), round((sum(ST_Area(ST_Transform(geom, 27700))) / 1e6)::numeric, 1) from geo.area where kind = 'flood_zone' group by 1, 2 order by 1, 2"); print("flood zone polygons (trigger, zone, n, km2):", cur.fetchall())
+    conn.commit()
 print("done", round(time.time() - t0, 1), "s")

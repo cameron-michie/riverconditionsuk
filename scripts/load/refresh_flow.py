@@ -3,24 +3,21 @@ import datetime as dt, os, sys, time, urllib.parse
 sys.path[:0] = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")]
 import lib
 from db import *
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "etl")); import common
 t0 = time.time()
 HY = "https://environment.data.gov.uk/hydrology/data/readings.json"
 KI = "https://timeseries.sepa.org.uk/KiWIS/KiWIS?service=kisters&type=queryServices&datasource=0&format=json"
 
 def put(cur, rows):
-    cur.execute("drop table if exists stg_r"); cur.execute("create temp table stg_r (sid bigint, at timestamptz, v float8) on commit drop"); copy_rows(cur, "stg_r", ["sid", "at", "v"], rows)
-    cur.execute("insert into core.observation (series_id, observed_at, value, quality) select sid, at, v, 'unchecked' from stg_r on conflict do nothing")
-    cur.execute("""insert into core.observation_latest (series_id, observed_at, value, quality) select distinct on (sid) sid, at, v, 'unchecked' from stg_r order by sid, at desc
-                   on conflict (series_id) do update set observed_at = excluded.observed_at, value = excluded.value, quality = excluded.quality, updated_at = now()
-                   where excluded.observed_at > core.observation_latest.observed_at""")
+    common.upsert_obs(cur, [(sid, at, v, "unchecked") for sid, at, v in rows], update=False)
 
 with connect() as conn, conn.cursor() as cur:
     cur.execute("select id from ref.parameter where code = 'river_flow'"); P = cur.fetchone()[0]
     # ── EA Hydrology: one call, latest 15-minute flow per station
     S = source_id(cur, "ea_hydrology")
     items = lib.getj(HY + "?observedProperty=waterFlow&periodName=15min&latest&_limit=100000", timeout=300)["items"]
-    cur.execute("select value, site_id from core.site_identifier where scheme = 'ea_hydro:guid'"); SITE = dict(cur.fetchall())
-    cur.execute("select source_series_key, id from core.series where source_id = %s", (S,)); SER = dict(cur.fetchall())
+    cur.execute("select value, site_id from geo.site_key where scheme = 'ea_hydro:guid'"); SITE = dict(cur.fetchall())
+    cur.execute("select source_series_key, id from live.series where source_id = %s", (S,)); SER = dict(cur.fetchall())
     rows, made = [], 0
     for r in items:
         mid = r["measure"]["@id"].rsplit("/", 1)[-1]; v = r.get("value")
@@ -29,7 +26,7 @@ with connect() as conn, conn.cursor() as cur:
         if sid is None:
             site = SITE.get(mid[:36])
             if site is None: continue
-            cur.execute("""insert into core.series (site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, qualifier, evidence_class)
+            cur.execute("""insert into live.series (site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, qualifier, evidence_class)
                            values (%s, %s, %s, %s, 'instant', 900, 'm3_s', 'qualified', 'official_monitoring') on conflict do nothing returning id""", (site, P, S, key))
             x = cur.fetchone(); sid = x[0] if x else None; made += 1
             if sid is None: continue
@@ -39,14 +36,14 @@ with connect() as conn, conn.cursor() as cur:
     # ── SEPA KiWIS: 15-minute flow
     S = source_id(cur, "sepa_kiwis")
     lst = lib.getj(KI + "&" + urllib.parse.urlencode({"request": "getTimeseriesList", "parametertype_name": "Q", "ts_name": "15minute", "returnfields": "ts_id,station_no", "rows": 2000}), timeout=120)[1:]
-    cur.execute("select value, site_id from core.site_identifier where scheme = 'sepa:station_no'"); SITE = dict(cur.fetchall())
-    cur.execute("select source_series_key, id from core.series where source_id = %s", (S,)); SER = dict(cur.fetchall())
+    cur.execute("select value, site_id from geo.site_key where scheme = 'sepa:station_no'"); SITE = dict(cur.fetchall())
+    cur.execute("select source_series_key, id from live.series where source_id = %s", (S,)); SER = dict(cur.fetchall())
     ids, made = [], 0
     for ts, no in lst:
         site = SITE.get(no)
         if site is None: continue
         if ts not in SER:
-            cur.execute("""insert into core.series (site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, evidence_class)
+            cur.execute("""insert into live.series (site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, evidence_class)
                            values (%s, %s, %s, %s, 'instant', 900, 'm3_s', 'official_monitoring') on conflict do nothing returning id""", (site, P, S, ts))
             x = cur.fetchone()
             if x is None: continue

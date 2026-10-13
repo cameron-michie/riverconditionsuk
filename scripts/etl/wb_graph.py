@@ -5,12 +5,12 @@ sys.path[:0] = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "
 from collections import defaultdict
 
 def build(cur):
-    cur.execute("select id, start_node_id, end_node_id, waterbody_id, dist_to_mouth_m from core.river_link where flow_direction = 'in direction' or flow_direction is null")
+    cur.execute("select id, start_node_id, end_node_id, waterbody_id, dist_to_mouth_m from geo.river_link where flow_direction = 'in direction' or flow_direction is null")
     links = cur.fetchall()
     starts = defaultdict(list)
     for lid, a, b, wb, d in links: starts[a].append((d, lid))
     by_id = {l[0]: l for l in links}
-    cur.execute("select id, area_km2 from core.waterbody where category = 'river' and area_km2 is not null"); area = dict(cur.fetchall())
+    cur.execute("select id, area_km2 from geo.waterbody where category = 'river' and area_km2 is not null"); area = dict(cur.fetchall())
     # outlet link of each waterbody: the one closest to the mouth
     outlet = {}
     for lid, a, b, wb, d in links:
@@ -47,6 +47,6 @@ if __name__ == "__main__":
     from db import connect
     with connect() as conn, conn.cursor() as cur:
         g = build(cur); print(len(g["wids"]), "waterbodies;", sum(1 for v in g["down"].values() if v is None), "outlets (to sea or off-network);", len(g["order"]) - len([w for w in g["order"] if True]) , "cycle guard")
-        cur.execute("select s.waterbody_id, a.value_num from core.site_attribute a join core.site s on s.id = a.site_id where a.key = 'catchment_area' and s.waterbody_id is not null"); rows = cur.fetchall()
+        cur.execute("select waterbody_id, (attrs->>'catchment_area')::float8 from geo.site where waterbody_id is not null and attrs ? 'catchment_area'"); rows = cur.fetchall()
         r = np.array([g["up_area"][w] / a for w, a in rows if w in g["up_area"] and a and a > 5])
         print(len(r), "gauged waterbodies; model upstream area / NRFA catchment area: quantiles 10/25/50/75/90 =", np.round(np.quantile(r, [.1, .25, .5, .75, .9]), 2))

@@ -1,4 +1,6 @@
-"""Series + observations: EA flood (15-min archive), EA hydrology (daily), NRFA (gdf), EA WQ archive (lab chemistry)."""
+"""Series + observations: EA flood (15-min archive), EA hydrology (daily), NRFA (gdf), EA WQ archive (lab chemistry).
+Creates the series a fresh database needs and loads whatever readings the raw files hold; scripts/etl/archive.py then moves everything
+outside live.observation's window to the cold archive. The scheduled ea_wq_recent job runs the wq mode with INCREMENTAL=1."""
 import sys, os, io, re, glob, json, gzip, time, collections
 import pandas as pd, numpy as np
 from db import *
@@ -15,9 +17,9 @@ def copy_df(cur, table, df):
     return len(df)
 
 with connect() as conn, conn.cursor() as cur:
-    cur.execute("select scheme, value, site_id from core.site_identifier where scheme in ('ea_flood:stationReference','ea_hydro:guid','nrfa:id','ea_wims:notation')")
+    cur.execute("select scheme, value, site_id from geo.site_key where scheme in ('ea_flood:stationReference','ea_hydro:guid','nrfa:id','ea_wims:notation')")
     SITE = {(s, v): i for s, v, i in cur.fetchall()}
-    cur.execute("select id, kind from core.site"); KIND = dict(cur.fetchall())
+    cur.execute("select id, kind from geo.site"); KIND = dict(cur.fetchall())
     cur.execute("select code, id from ref.parameter"); PARAM = dict(cur.fetchall())
     cur.execute("select id, aliases, factor, \"offset\" from ref.unit"); UNIT = {}
     for uid, al, f, o in cur.fetchall():
@@ -25,15 +27,15 @@ with connect() as conn, conn.cursor() as cur:
         for a in al: UNIT[a.lower()] = (uid, float(f), float(o))
     SRC = {s: source_id(cur, s) for s in ("ea_flood_monitoring", "ea_hydrology", "nrfa", "ea_wq_archive")}
     def seq(n):
-        cur.execute("select nextval(pg_get_serial_sequence('core.series','id')) from generate_series(1,%s)", (n,)); return [r[0] for r in cur.fetchall()]
+        cur.execute("select nextval(pg_get_serial_sequence('live.series','id')) from generate_series(1,%s)", (n,)); return [r[0] for r in cur.fetchall()]
     def make_series(rows):
         """rows: dict key -> dict(site, param, src, agg, interval, unit, native_unit, qualifier, datum, ev, matrix, fraction, method)"""
         cur.execute("drop table if exists stg_series"); ids = seq(len(rows)); cur.execute("create temp table stg_series (id bigint, site_id bigint, parameter_id bigint, source_id bigint, key text, agg text, interval_s int, unit text, native_unit text, qualifier text, datum text, ev text, matrix text, fraction text, method text) on commit drop")
         copy_rows(cur, "stg_series", ["id", "site_id", "parameter_id", "source_id", "key", "agg", "interval_s", "unit", "native_unit", "qualifier", "datum", "ev", "matrix", "fraction", "method"],
                   ((i, r["site"], r["param"], r["src"], k, r["agg"], r["interval"], r["unit"], r["native_unit"], r.get("qualifier"), r.get("datum"), r["ev"], r.get("matrix", "river_water"), r.get("fraction"), r.get("method")) for i, (k, r) in zip(ids, rows.items())))
-        cur.execute("""insert into core.series (id, site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, native_unit, qualifier, datum, evidence_class, matrix, fraction, method)
+        cur.execute("""insert into live.series (id, site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, native_unit, qualifier, datum, evidence_class, matrix, fraction, method)
                        overriding system value select id, site_id, parameter_id, source_id, key, agg, interval_s, unit, native_unit, qualifier, datum, ev::text, matrix, fraction, method from stg_series on conflict (source_id, source_series_key) do nothing""")
-        cur.execute("select source_series_key, id from core.series where source_id = any(%s)", (list({r["src"] for r in rows.values()}),))
+        cur.execute("select source_series_key, id from live.series where source_id = any(%s)", (list({r["src"] for r in rows.values()}),))
         return dict(cur.fetchall())
 
     # ═════════ EA flood-monitoring ═════════
@@ -67,7 +69,7 @@ with connect() as conn, conn.cursor() as cur:
             d = d[d["v"].notna()]
             out = pd.DataFrame({"series_id": d["series_id"], "observed_at": pd.to_datetime(d["dateTime"], utc=True), "value": d["v"], "quality": d["quality"]})
             tot += copy_df(cur, "stg_obs", out); print(os.path.basename(f), len(out), round(time.time() - t0, 1), "s", flush=True)
-        cur.execute("insert into core.observation (series_id, observed_at, value, quality) select series_id, observed_at, value, quality from stg_obs on conflict do nothing")
+        cur.execute("insert into live.observation (series_id, observed_at, value, quality) select series_id, observed_at, value, quality from stg_obs on conflict do nothing")
         cur.execute("truncate stg_obs"); print("flood observations", tot)
 
     # ═════════ EA hydrology ═════════
@@ -98,7 +100,7 @@ with connect() as conn, conn.cursor() as cur:
                 recs.append((sid, r["dateTime"] + "+00", v, QM.get(str(r.get("quality", "")).lower(), "unchecked") if v is not None else "missing", comp))
         cur.execute("create temp table stg_h (series_id bigint, observed_at timestamptz, value double precision, quality text, completeness real) on commit drop")
         copy_rows(cur, "stg_h", ["series_id", "observed_at", "value", "quality", "completeness"], recs)
-        cur.execute("insert into core.observation (series_id, observed_at, value, quality, completeness) select series_id, observed_at, value, quality, completeness from stg_h on conflict do nothing")
+        cur.execute("insert into live.observation (series_id, observed_at, value, quality) select series_id, observed_at, value, quality from stg_h on conflict do nothing")
         print("hydrology observations", len(recs), round(time.time() - t0, 1), "s")
 
     # ═════════ NRFA gdf ═════════
@@ -118,7 +120,7 @@ with connect() as conn, conn.cursor() as cur:
                 recs.append((sid, ds[i] + " 00:00:00+00", float(ds[i + 1]), "good"))
         cur.execute("create temp table stg_n (series_id bigint, observed_at timestamptz, value double precision, quality text) on commit drop")
         copy_rows(cur, "stg_n", ["series_id", "observed_at", "value", "quality"], recs)
-        cur.execute("insert into core.observation (series_id, observed_at, value, quality) select * from stg_n on conflict do nothing")
+        cur.execute("insert into live.observation (series_id, observed_at, value, quality) select * from stg_n on conflict do nothing")
         print("nrfa observations", len(recs), round(time.time() - t0, 1), "s")
 
     # ═════════ EA WQ archive ═════════
@@ -154,27 +156,22 @@ with connect() as conn, conn.cursor() as cur:
         for k, sid, det, un in ser.itertuples(index=False):
             p, u, fr, me = AL[det]; rows[k] = dict(site=sid, param=p, src=SRC["ea_wq_archive"], agg="instant", interval=None, unit=PU[p], native_unit=un, ev="official_monitoring", fraction=fr, method=me, matrix="river_water")
         smap = make_series(rows); print("wq series", len(smap), round(time.time() - t0, 1), "s", flush=True)
-        # samples
-        smp = d.drop_duplicates("sample_key")[["sample_key", "site_id", "observed_at", "material", "purpose"]]
-        cur.execute("create temp table stg_smp (key text, site_id bigint, at timestamptz, material text, purpose text) on commit drop")
-        copy_df(cur, "stg_smp", smp.rename(columns={"sample_key": "key", "observed_at": "at"}))
-        cur.execute("insert into core.sample (site_id, source_id, source_sample_key, sampled_at, material, purpose) select site_id, %s, key, at, material, purpose from stg_smp on conflict do nothing", (SRC["ea_wq_archive"],))
-        cur.execute("select source_sample_key, id from core.sample where source_id=%s", (SRC["ea_wq_archive"],)); samp = dict(cur.fetchall())
-        out = pd.DataFrame({"series_id": d["series_key"].map(smap).astype("int64"), "observed_at": d["observed_at"], "value": d["value"], "censor": d["censor"], "detection_limit": d["dl"],
-                            "value_raw": d["raw"], "quality": "unchecked", "sample_id": d["sample_key"].map(samp).astype("Int64")})
-        cur.execute("create temp table stg_w (series_id bigint, observed_at timestamptz, value double precision, censor text, detection_limit double precision, value_raw text, quality text, sample_id bigint) on commit drop")
+        out = pd.DataFrame({"series_id": d["series_key"].map(smap).astype("int64"), "observed_at": d["observed_at"], "value": d["value"], "censor": d["censor"], "quality": "unchecked"})
+        cur.execute("create temp table stg_w (series_id bigint, observed_at timestamptz, value double precision, censor text, quality text) on commit drop")
         copy_df(cur, "stg_w", out)
-        cur.execute("insert into core.observation (series_id, observed_at, value, censor, detection_limit, value_raw, quality, sample_id) select distinct on (series_id, observed_at) * from stg_w order by series_id, observed_at on conflict (series_id, observed_at) do update set value = excluded.value, censor = excluded.censor, detection_limit = excluded.detection_limit, value_raw = excluded.value_raw, sample_id = excluded.sample_id where (core.observation.value, core.observation.censor) is distinct from (excluded.value, excluded.censor)")
+        cur.execute("insert into live.observation (series_id, observed_at, value, censor, quality) select distinct on (series_id, observed_at) * from stg_w order by series_id, observed_at on conflict (series_id, observed_at) do update set value = excluded.value, censor = excluded.censor where (live.observation.value, live.observation.censor) is distinct from (excluded.value, excluded.censor)")
         touched = [int(x) for x in out["series_id"].unique()]
         print("wq observations", len(out), "censored", int((out["censor"].notna()).sum()), round(time.time() - t0, 1), "s")
 
     # rollups (INCREMENTAL=1: only the series just loaded; the full-table pass over every observation takes minutes)
     scoped = bool(os.environ.get("INCREMENTAL")) and "touched" in dir(); W = " and series_id = any(%(ids)s)" if scoped else ""; P = {"ids": touched} if scoped else {}
-    cur.execute(f"""insert into core.observation_latest (series_id, observed_at, value, censor, quality)
-        select distinct on (series_id) series_id, observed_at, value, censor, quality from core.observation where (value is not null or censor is not null){W} order by series_id, observed_at desc
-        on conflict (series_id) do update set observed_at = excluded.observed_at, value = excluded.value, censor = excluded.censor, quality = excluded.quality, updated_at = now()""", P)
-    cur.execute(f"""update core.series s set first_at = a.mn, last_at = a.mx from (select series_id, min(observed_at) mn, max(observed_at) mx from core.observation where true{W} group by 1) a where a.series_id = s.id""", P)
+    # older readings may already be in the archive: the latest only moves forward and first_at only back
+    cur.execute(f"""update live.series s set latest_at = l.observed_at, latest_value = l.value, latest_censor = l.censor, latest_quality = l.quality
+        from (select distinct on (series_id) series_id, observed_at, value, censor, quality from live.observation where (value is not null or censor is not null){W} order by series_id, observed_at desc) l
+        where l.series_id = s.id and (s.latest_at is null or l.observed_at >= s.latest_at)""", P)
+    cur.execute(f"""update live.series s set first_at = least(coalesce(s.first_at, a.mn), a.mn), last_at = greatest(coalesce(s.last_at, a.mx), a.mx)
+        from (select series_id, min(observed_at) mn, max(observed_at) mx from live.observation where true{W} group by 1) a where a.series_id = s.id""", P)
     conn.commit()
-    for t in ("series", "sample", "observation", "observation_latest"):
-        cur.execute(f"select count(*) from core.{t}"); print(t, cur.fetchone()[0])
+    for t in ("live.series", "live.observation"):
+        cur.execute(f"select count(*) from {t}"); print(t, cur.fetchone()[0])
 print("done", round(time.time() - t0, 1), "s")

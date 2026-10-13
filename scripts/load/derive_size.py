@@ -4,7 +4,7 @@ import collections, time
 from db import *
 t0 = time.time()
 with connect() as conn, conn.cursor() as cur:
-    cur.execute("select id, start_node_id, end_node_id, coalesce(length_m, 0), flow_direction from core.river_link")
+    cur.execute("select id, start_node_id, end_node_id, coalesce(length_m, 0), flow_direction from geo.river_link")
     L = cur.fetchall(); n = len(L); lid = [r[0] for r in L]; ln = [float(r[3]) for r in L]
     s = [r[1] for r in L]; e = [r[2] for r in L]
     for i, r in enumerate(L):
@@ -32,8 +32,8 @@ with connect() as conn, conn.cursor() as cur:
     import math
     cur.execute("create temp table stg_sz (id bigint, km real, sc smallint) on commit drop")
     copy_rows(cur, "stg_sz", ["id", "km", "sc"], ((lid[i], up[i] / 1000, int(math.floor(math.log2(up[i] / 1000 + 1)))) for i in range(n)))
-    cur.execute("alter table core.river_link add column if not exists upstream_km real, add column if not exists size_class smallint")
-    cur.execute("update core.river_link l set upstream_km = t.km, size_class = t.sc from stg_sz t where t.id = l.id")
-    cur.execute("select size_class, count(*) from core.river_link group by 1 order by 1"); print(cur.fetchall())
+    cur.execute("alter table geo.river_link add column if not exists upstream_km real, add column if not exists size_class smallint")
+    cur.execute("update geo.river_link l set upstream_km = t.km, size_class = t.sc from stg_sz t where t.id = l.id")
+    cur.execute("select size_class, count(*) from geo.river_link group by 1 order by 1"); print(cur.fetchall())
     conn.commit()
 print("done", round(time.time() - t0, 1), "s")

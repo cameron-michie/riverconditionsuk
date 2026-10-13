@@ -11,3 +11,6 @@ supabase_creds.md
 .claude/worktrees/
 web/wx/
 data/
+supabase/compute/rivers-etl/app/
+/data
+/.venv

@@ -1,4 +1,4 @@
-"""OS Open Rivers GeoPackage -> core.river_node, core.river_link (BNG kept, WGS84 derived in PostGIS)."""
+"""OS Open Rivers GeoPackage -> geo.river_link (BNG kept, WGS84 derived in PostGIS). Nodes are numbered here and kept only as link endpoints (start/end_node_id)."""
 import sqlite3, struct, time, os
 from db import *
 
@@ -22,16 +22,16 @@ with connect() as conn, conn.cursor() as cur:
                   ((i, f, nm, na, ln, fd, s, e, wkb_of(g)) for g, i, fd, ln, f, nm, na, s, e in
                    src.execute("select geometry, id, flow_direction, length, form, watercourse_name, watercourse_name_alternative, start_node, end_node from watercourse_link")))
     print("staged", n, m, round(time.time() - t0, 1), "s")
-    cur.execute("""insert into core.river_node (os_id, category, geom, geom_bng)
-        select os_id, category, ST_Transform(g, 4326), g from (select os_id, category, ST_SetSRID(ST_GeomFromWKB(wkb), 27700) g from stg_node) q""")
-    cur.execute("""insert into core.river_link (os_id, form, name, name_alt, length_m, flow_direction, start_node_id, end_node_id, geom, geom_bng)
-        select l.os_id, l.form, l.name, l.name_alt, l.length_m, l.flow_direction, s.id, e.id,
+    cur.execute("create temp table node_id on commit drop as select row_number() over (order by os_id) id, os_id from stg_node")
+    cur.execute("create unique index on node_id (os_id)")
+    cur.execute("""insert into geo.river_link (os_id, form, name, length_m, flow_direction, start_node_id, end_node_id, geom, geom_bng)
+        select l.os_id, l.form, coalesce(l.name, l.name_alt), l.length_m, l.flow_direction, s.id, e.id,
                ST_Transform(ST_Force2D(g), 4326), ST_Force2D(g)
         from (select *, ST_SetSRID(ST_GeomFromWKB(wkb), 27700) g from stg_link) l
-        join core.river_node s on s.os_id = l.start_os
-        join core.river_node e on e.os_id = l.end_os""")
-    cur.execute("select count(*) from core.river_node"); a = cur.fetchone()[0]
-    cur.execute("select count(*) from core.river_link"); b = cur.fetchone()[0]
+        join node_id s on s.os_id = l.start_os
+        join node_id e on e.os_id = l.end_os""")
+    cur.execute("select count(*) from node_id"); a = cur.fetchone()[0]
+    cur.execute("select count(*) from geo.river_link"); b = cur.fetchone()[0]
     finish_run(cur, run, read=n + m, written=a + b)
     conn.commit()
     print("loaded nodes", a, "links", b, round(time.time() - t0, 1), "s")

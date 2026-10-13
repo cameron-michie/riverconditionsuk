@@ -13,8 +13,8 @@ for page in range(2):
     items += lib.getj(D, params={"_pageSize": 500, "_page": page, "_sort": "-sampleDateTime"}, timeout=180)["result"]["items"]
 with connect() as conn, conn.cursor() as cur:
     S = source_id(cur, "ea_bathing"); run = start_run(cur, "ea_bathing", "bathing_recent")
-    cur.execute("select value, site_id from core.site_identifier where scheme = 'eubwid'"); EU = dict(cur.fetchall())
-    cur.execute("select source_series_key, id from core.series where source_id = %s", (S,)); SER = dict(cur.fetchall())
+    cur.execute("select value, site_id from geo.site_key where scheme = 'eubwid'"); EU = dict(cur.fetchall())
+    cur.execute("select source_series_key, id from live.series where source_id = %s", (S,)); SER = dict(cur.fetchall())
     import datetime as dt; from zoneinfo import ZoneInfo
     rows = []; skipped = 0
     for x in items:

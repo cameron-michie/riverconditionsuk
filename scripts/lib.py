@@ -21,7 +21,16 @@ def _throttle(url):
     if wait:
         time.sleep(wait)
 
+# On Supabase Compute the egress IP is a US cloud address that the EA's hydrology and linked-data (doc/) APIs refuse. Where EA_PROXY_URL is set, those two paths go through an
+# Edge Function pinned to London (x-region: the EA also blocks US egress, and a function otherwise runs near its caller) (supabase/functions/eaproxy). Everything else, and every local run, is untouched.
+PROXY, PTOK = os.environ.get("EA_PROXY_URL"), os.environ.get("EA_PROXY_TOKEN")
+def _via_proxy(url, params, headers):
+    if PROXY and (url.startswith("https://environment.data.gov.uk/hydrology") or url.startswith("https://environment.data.gov.uk/doc/")):
+        return PROXY, {"u": str(httpx.URL(url).copy_merge_params(params or {}))}, {**(headers or {}), "x-etl-token": PTOK, "x-region": os.environ.get("EA_PROXY_REGION", "eu-west-2")}
+    return url, params, headers
+
 def get(url, params=None, headers=None, tries=6, **kw):
+    url, params, headers = _via_proxy(url, params, headers)
     for i in range(tries):
         try:
             _throttle(url)

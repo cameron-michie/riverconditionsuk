@@ -1,19 +1,19 @@
 """Fit a rain-driven flow model per gauge and report skill on a held-out year.
-State is the normal score z of the gauge's seasonal flow percentile (same scale as core.flow_normal / core.seasonal_pct).
+State is the normal score z of the gauge's seasonal flow percentile (same scale as geo.gauge_model.normal / live.seasonal_pct).
   z[d] = c + phi*z[d-1] + b0*r[d] + b1*r[d-1] + b2*r[d-2] + b3*mean(r[d-3..d-7]),   r = sqrt(catchment rain mm), day = 09:00-09:00 UTC (EA convention)
 Training 2015-01 .. 2024-09, held out 2024-10 .. 2025-09 (the end of the NRFA daily flow record held locally). Rain: NRFA CEH-GEAR catchment daily rainfall.
-Usage: flow_model_fit.py [--save]   (--save writes core.flow_model_param)"""
+Usage: flow_model_fit.py [--save]   (--save writes the model columns of geo.gauge_model)"""
 import json, os, sys, time
 sys.path[:0] = [os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."), os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "load")]
 import numpy as np, pandas as pd
 from scipy.stats import norm
 import lib
-from db import connect
+from db import connect, NORMALS_SQL, AREA_SQL
 
 RAW = lib.ROOT; T0, TRAIN_END, END = "2015-01-01", "2024-09-30", "2025-09-30"
 LAGS = ("r0", "r1", "r2", "r37")
 t_start = time.time()
-SAVE = "--save" in sys.argv          # production fit: train on every day up to END, write core.flow_model_param, skip the held-out evaluation
+SAVE = "--save" in sys.argv          # production fit: train on every day up to END, write geo.gauge_model, skip the held-out evaluation
 if SAVE: TRAIN_END = END
 
 def load_series(path, lo=T0, hi=END):
@@ -56,8 +56,8 @@ def recursive(par, z0, r, d0, k):
 
 if __name__ == "__main__":
     with connect() as conn, conn.cursor() as cur:
-        cur.execute("select s.value, s.site_id from core.site_identifier s where scheme = 'nrfa:id'"); SITE = {v: i for v, i in cur.fetchall()}
-        cur.execute("select site_id, doy, q from core.flow_normal"); QT = {}
+        cur.execute("select s.value, s.site_id from geo.site_key s where scheme = 'nrfa:id'"); SITE = {v: i for v, i in cur.fetchall()}
+        cur.execute(NORMALS_SQL); QT = {}
         for sid, doy, q in cur.fetchall(): QT.setdefault(sid, {})[int(doy)] = q
     ids = [f[:-5] for f in sorted(os.listdir(os.path.join(RAW, "nrfa", "cdr"))) if f[:-5] in SITE and SITE[f[:-5]] in QT]
     print(len(ids), "gauges with rain, flow and normals", flush=True)
@@ -96,8 +96,10 @@ if __name__ == "__main__":
         if n % 200 == 0: print(n, len(res), round(time.time() - t_start), "s", flush=True)
     if SAVE:
         with connect() as conn, conn.cursor() as cur:
-            cur.execute("truncate core.flow_model_param")
-            cur.executemany("insert into core.flow_model_param (site_id, beta, sd, n, r2, trained_through) values (%s, %s, %s, %s, %s, %s)", [(sid, p["beta"], p["sd"], p["n"], p["r2"], END) for sid, p in params.items()])
+            cur.execute("update geo.gauge_model set beta = null, sd = null, r2 = null, trained_through = null")
+            cur.executemany("""insert into geo.gauge_model (site_id, beta, sd, r2, trained_through) select %s, %s, %s, %s, %s where exists (select 1 from geo.site where id = %s)
+                               on conflict (site_id) do update set beta = excluded.beta, sd = excluded.sd, r2 = excluded.r2, trained_through = excluded.trained_through, built_at = now()""",
+                            [(sid, p["beta"], p["sd"], p["r2"], END, sid) for sid, p in params.items()])
             conn.commit()
         print("saved parameters for", len(params), "gauges"); sys.exit(0)
     R = pd.DataFrame(res); print(len(R), "gauges evaluated")
