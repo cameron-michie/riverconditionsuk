@@ -3,6 +3,7 @@
   nrw_historical.py --days N   gap fill: last N days -> Postgres only (use after an outage)
 Stations are the same gauges as the open telemetry API, with coordinates that differ by ~90 m, so they are matched by position (<= 400 m) and kind."""
 import concurrent.futures as cf, datetime as dt, hashlib, json, math, os, sys
+os.environ.setdefault("MIN_GAP", "7")      # the key allows ~10 calls then answers 429; one call per 7 s stays under it
 import common, lib
 from common import upsert_obs
 from db import connect, source_id, start_run, finish_run
@@ -63,7 +64,7 @@ with connect() as conn, conn.cursor() as cur:
         return sid, [(sid, dt.datetime.fromisoformat(x["time"].replace("Z", "+00:00")), float(x["value"])) for x in r.get("parameterReadings", []) if x.get("value") is not None]
     RAIN_SIDS = {v for (_, p), v in SERIES.items() if p == PID['rainfall']}
     hot, old, bad = [], [], 0
-    with cf.ThreadPoolExecutor(6) as ex:
+    with cf.ThreadPoolExecutor(1) as ex:
         for i, (sid, rows) in enumerate(ex.map(fetch, jobs)):
             if rows is None: bad += 1; continue
             cap = 200 if sid in RAIN_SIDS else 1e9               # a rain gauge cannot tip 200 mm in 15 minutes
