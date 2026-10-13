@@ -192,7 +192,7 @@ language plpgsql
 stable
 set search_path = ''
 as $$
-declare qs double precision[]; i int; lo double precision; hi double precision; d int := extract(doy from p_at)::int; k int;
+declare qs double precision[]; lo double precision; hi double precision; d int := extract(doy from p_at)::int; k int;
 begin
   k := 1 + round((d - 1) / 10.0)::int; if k > 37 then k := 37; end if;
   select array(select unnest(m.normal[k:k][1:21])) into qs from geo.gauge_model m where m.site_id = p_site;

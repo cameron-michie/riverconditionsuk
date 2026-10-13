@@ -143,7 +143,7 @@ create unique index on _attr (site_id);
 create temp table _spill on commit drop as
   select a.site_id, jsonb_strip_nulls(jsonb_build_object('spills', a.spill_count, 'spill_hours', a.total_duration_hr, 'spill_year', a.year, 'edm_operating_pct', a.edm_operating_pct,
            'spills_prev', (select p.spill_count from core.discharge_annual p where p.site_id = a.site_id and p.year < a.year order by p.year desc limit 1))) a
-  from (select distinct on (site_id) * from core.discharge_annual order by site_id, year desc, (spill_count is not null) desc) a;
+  from core.discharge_annual a where a.year = (select max(year) from core.discharge_annual);   -- the latest reporting year, the one the map labels
 create unique index on _spill (site_id);
 
 create temp table _works on commit drop as

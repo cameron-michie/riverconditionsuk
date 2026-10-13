@@ -927,7 +927,7 @@ CREATE OR REPLACE FUNCTION api.weather (
   SECURITY DEFINER
   SET search_path TO ''
   AS $function$
-declare at timestamptz := coalesce(p_at, now()); fr record; pr record; out jsonb := '{}';
+declare at timestamptz := coalesce(p_at, now()); fr record; pr record; out jsonb := '{}'::jsonb;
 begin
   -- rain: radar up to now, forecast after. Fall back to whichever exists.
   select * into fr from (
@@ -1221,7 +1221,7 @@ CREATE OR REPLACE FUNCTION live.seasonal_pct (
   STABLE
   SET search_path TO ''
   AS $function$
-declare qs double precision[]; i int; lo double precision; hi double precision; d int := extract(doy from p_at)::int; k int;
+declare qs double precision[]; lo double precision; hi double precision; d int := extract(doy from p_at)::int; k int;
 begin
   k := 1 + round((d - 1) / 10.0)::int; if k > 37 then k := 37; end if;
   select array(select unnest(m.normal[k:k][1:21])) into qs from geo.gauge_model m where m.site_id = p_site;

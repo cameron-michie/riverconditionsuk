@@ -381,7 +381,7 @@ stable
 security definer
 set search_path = ''
 as $$
-declare at timestamptz := coalesce(p_at, now()); fr record; pr record; out jsonb := '{}';
+declare at timestamptz := coalesce(p_at, now()); fr record; pr record; out jsonb := '{}'::jsonb;
 begin
   -- rain: radar up to now, forecast after. Fall back to whichever exists.
   select * into fr from (

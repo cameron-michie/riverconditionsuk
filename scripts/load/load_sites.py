@@ -221,12 +221,12 @@ with connect() as conn, conn.cursor() as cur:
         select s.site_id, 'overflow', s.status, s.since::timestamptz, s.rep::timestamptz,
                jsonb_strip_nulls(jsonb_build_object('raw_status', s.raw, 'last_event_start', s.st::timestamptz, 'last_event_end', s.en::timestamptz, 'source_id', s.src))
         from stg_live s join geo.site c on c.id = s.site_id on conflict do nothing""")
-    # EDM annual returns: the latest year and the one before, on the site
+    # EDM annual returns: the latest reporting year and the one before, on the site
     cur.execute("create temp table stg_an (site_id bigint, year smallint, spills numeric, hours numeric, opct numeric) on commit drop")
     copy_rows(cur, "stg_an", ["site_id", "year", "spills", "hours", "opct"], ((k[0], k[1], v["spills"], v["hours"], v["opct"]) for k, v in annual.items()))
     cur.execute("""update geo.site c set attrs = c.attrs || jsonb_strip_nulls(jsonb_build_object('spills', a.spills::int, 'spill_hours', a.hours, 'spill_year', a.year, 'edm_operating_pct', a.opct,
                           'spills_prev', (select p.spills::int from stg_an p where p.site_id = a.site_id and p.year < a.year order by p.year desc limit 1)))
-                   from (select distinct on (site_id) * from stg_an order by site_id, year desc, (spills is not null) desc) a where a.site_id = c.id""")
+                   from stg_an a where a.year = (select max(year) from stg_an) and a.site_id = c.id""")   # the latest reporting year, the one the map labels
     # bathing: the latest classification, on the site
     rows = []
     for k, (sid, b) in bath_site.items():
