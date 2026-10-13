@@ -1,5 +1,5 @@
 """Final-effluent monitoring at water-company works -> live.series (matrix 'effluent', evidence 'company_reported') + observations."""
-import glob, gzip, io, os, time
+import glob, gzip, io, os, sys, time
 import numpy as np, pandas as pd
 from db import *
 t0 = time.time()
@@ -30,14 +30,14 @@ with connect() as conn, conn.cursor() as cur:
     cur.execute("""insert into live.series (id, site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, native_unit, evidence_class, matrix, method)
         overriding system value select id, site, param, %s, key, 'instant', null, unit, nunit, 'company_reported', 'effluent', 'operator self-monitoring' from stg_s on conflict (source_id, source_series_key) do nothing""", (src,))
     cur.execute("select source_series_key, id from live.series where source_id = %s and matrix = 'effluent'", (src,)); SM = dict(cur.fetchall())
-    out = pd.DataFrame({"series_id": d["key"].map(SM).astype("int64"), "observed_at": d["observed_at"], "value": d["value"], "censor": d["censor"], "detection_limit": d["dl"], "value_raw": d["raw"], "quality": "unchecked"})
-    cur.execute("create temp table stg_o (series_id bigint, observed_at timestamptz, value float8, censor text, detection_limit float8, value_raw text, quality text) on commit drop")
+    # a censored result ("<5") keeps its detection limit as the value
+    out = pd.DataFrame({"series_id": d["key"].map(SM).astype("int64"), "observed_at": d["observed_at"], "value": d["value"].where(d["value"].notna() | d["censor"].isna(), d["dl"]), "quality": "unchecked", "censor": d["censor"]})
+    cur.execute("create temp table stg_o (series_id bigint, observed_at timestamptz, value float8, quality text, censor text) on commit drop")
     buf = io.StringIO(); out.to_csv(buf, index=False, header=False, na_rep="\\N"); buf.seek(0)
     with cur.copy("copy stg_o from stdin with (format csv, null '\\N')") as cp:
         while chunk := buf.read(1 << 22): cp.write(chunk)
-    cur.execute("insert into live.observation (series_id, observed_at, value, censor, detection_limit, value_raw, quality) select * from stg_o on conflict do nothing")
-    cur.execute("""insert into core.observation_latest (series_id, observed_at, value, censor, quality) select distinct on (series_id) series_id, observed_at, value, censor, quality from stg_o order by series_id, observed_at desc
-                   on conflict (series_id) do update set observed_at = excluded.observed_at, value = excluded.value, censor = excluded.censor""")
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "etl")); import common
+    common.merge_staged(cur, "stg_o", update=False)
     print("effluent series", len(SM), "observations", len(out), "points with data", d["point"].nunique(), round(time.time() - t0, 1), "s")
-    cur.execute("select live.refresh_works()"); cur.execute("select count(*) filter (where attrs ? 'latest'), count(*) filter (where measured), count(*) from core.sewage_works"); print("works (with latest, measured, total):", cur.fetchone())
+    cur.execute("select live.refresh_works()"); cur.execute("select count(*) filter (where n.site_id is not null), count(*) filter (where (s.attrs->>'measured')::boolean), count(*) from geo.site s left join live.site_now n on n.site_id = s.id and n.kind = 'works' where s.kind = 'sewage_works' and s.attrs ? 'works'"); print("works (with latest, measured, total):", cur.fetchone())
     conn.commit()

@@ -6,9 +6,9 @@ from db import copy_rows
 def upsert_obs(cur, rows, update=True):
     """rows: (series_id, observed_at, value, quality[, completeness[, censor[, detection_limit]]]). Inserts new readings into live.observation; with update=True, rewrites
     readings whose value or quality changed (daily QC moves Unchecked -> Good). Moves each series' latest_* forward. Returns (rows seen, rows written).
-    completeness and detection_limit are accepted for compatibility and not stored."""
+    completeness is accepted for compatibility and not stored; a censored reading with no value ("<10") stores its detection limit as the value."""
     if not rows: return 0, 0
-    rows = [(r[0], r[1], r[2], r[3], r[5] if len(r) > 5 else None) for r in rows]
+    rows = [(r[0], r[1], r[2] if r[2] is not None or len(r) < 7 or not r[5] else r[6], r[3], r[5] if len(r) > 5 else None) for r in rows]
     cur.execute("create temp table if not exists stg_u (series_id bigint, observed_at timestamptz, value double precision, quality text, censor text) on commit drop")
     cur.execute("truncate stg_u")
     copy_rows(cur, "stg_u", ["series_id", "observed_at", "value", "quality", "censor"], rows)

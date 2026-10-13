@@ -13,13 +13,15 @@ ALIAS = {
 def slug(s): return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
 t0 = time.time()
 with connect() as conn, conn.cursor() as cur:
-    cur.execute("update geo.river_link set river_id = null"); cur.execute("update geo.site set river_id = null where river_id is not null"); cur.execute("update core.survey set river_id = null where river_id is not null")
-    cur.execute("truncate core.waterbody_river"); cur.execute("delete from live.signal where entity_kind = 'river'"); cur.execute("delete from research.work_place where place_kind = 'river' and method = 'rule'")
-    cur.execute("delete from core.river_alias"); cur.execute("delete from geo.river")
+    cur.execute("update geo.river_link set river_id = null"); cur.execute("update geo.site set river_id = null where river_id is not null"); cur.execute("update live.survey set river_id = null where river_id is not null")
+    cur.execute("update geo.waterbody set river_id = null where river_id is not null"); cur.execute("delete from live.signal where entity_kind = 'river'")
+    cur.execute("update geo.river set parent_river_id = null"); cur.execute("delete from geo.river")
     cur.execute("select id, name, start_node_id, end_node_id, coalesce(length_m,0), form, flow_direction from geo.river_link")
     L = cur.fetchall()
-    cur.execute("select id, ST_X(geom), ST_Y(geom), category from core.river_node")
-    rows_n = cur.fetchall(); XY = {i: (x, y) for i, x, y, c in rows_n}; CAT = {i: c for i, x, y, c in rows_n}
+    # node positions from the link geometry (OS digitises each link from its start node to its end node)
+    cur.execute("""select start_node_id, ST_X(ST_StartPoint(geom)), ST_Y(ST_StartPoint(geom)) from geo.river_link
+                   union select end_node_id, ST_X(ST_EndPoint(geom)), ST_Y(ST_EndPoint(geom)) from geo.river_link""")
+    XY = {i: (x, y) for i, x, y in cur.fetchall()}
     n = len(L); print("links", n, "nodes", len(XY))
     lid = [r[0] for r in L]; idx = {l: i for i, l in enumerate(lid)}
     name = [r[1] for r in L]; s = [r[2] for r in L]; e = [r[3] for r in L]
@@ -166,9 +168,7 @@ with connect() as conn, conn.cursor() as cur:
     cur.execute("update geo.river r set parent_river_id = p.parent from stg_par p where p.id = r.id")
 
     # aliases (Welsh/English)
-    cur.execute("""insert into core.river_alias (river_id, alias, lang)
-                   select id, name_cy, 'cy' from geo.river where name_cy is not null
-                   union select id, name, 'en' from geo.river where name_cy is not null on conflict do nothing""")
+    cur.execute("update geo.river set aliases = array[name_cy, name] where name_cy is not null")
     # geometry: merge + simplify (~30 m) for display
     cur.execute("""update geo.river r set geom = g.geom from (
                      select river_id, ST_Multi(ST_SimplifyPreserveTopology(ST_LineMerge(ST_Collect(geom)), 0.0003)) geom

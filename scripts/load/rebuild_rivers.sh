@@ -9,5 +9,5 @@ psql $DB -q -c "update geo.river_link l set river_class = r.mx from (select rive
 python3 -W ignore load_tidal.py      # estuary and coastal water bodies; reassigns tidal links
 psql $DB -q -f snap_sites.sql > /dev/null
 psql $DB -q -c "select geo.refresh_waterbody_river()" > /dev/null
-psql $DB -q -f compute_signals.sql > /dev/null          # also refreshes core.waterbody_map_state
+psql $DB -q -f compute_signals.sql > /dev/null          # also refreshes live.waterbody_now
 python3 -W ignore link_research.py

@@ -63,16 +63,18 @@ select r.id, r.slug, r.name, r.name_cy, r.parent_river_id, r.mouth_node_id, r.so
        r.geom, r.label_pt
 from core.river r;
 
+-- per element: the latest rated assessment (an unrated "not assessed" only where nothing was ever rated), its rank, and the previous cycle's status and rank
+create temp table _pc on commit drop as
+  select distinct on (waterbody_id, element_code, cycle) waterbody_id, element_code, cycle, year, status, status_rank, certainty
+  from core.waterbody_classification order by waterbody_id, element_code, cycle, (status_rank is not null) desc, year desc;
+create index on _pc (waterbody_id, element_code, cycle);
 create temp table _cls on commit drop as
-  with per_cycle as (   -- the latest assessment within each cycle
-    select distinct on (waterbody_id, element_code, cycle) waterbody_id, element_code, cycle, year, status, certainty
-    from core.waterbody_classification order by waterbody_id, element_code, cycle, year desc),
-  seq as (
-    select *, lag(status) over (partition by waterbody_id, element_code order by cycle) prev,
-           row_number() over (partition by waterbody_id, element_code order by cycle desc) rn
-    from per_cycle)
-  select waterbody_id, jsonb_object_agg(element_code, jsonb_strip_nulls(jsonb_build_object('status', status, 'year', year, 'cycle', cycle, 'certainty', certainty, 'prev', prev))) classes
-  from seq where rn = 1 group by waterbody_id;
+  with ranked as (select *, row_number() over (partition by waterbody_id, element_code order by (status_rank is not null) desc, cycle desc, year desc) rn from _pc)
+  select c.waterbody_id, jsonb_object_agg(c.element_code, jsonb_strip_nulls(jsonb_build_object('status', c.status, 'rank', c.status_rank, 'year', c.year, 'cycle', c.cycle,
+           'certainty', c.certainty, 'prev', p.status, 'prev_rank', p.status_rank))) classes
+  from ranked c left join lateral (select status, status_rank from _pc p where p.waterbody_id = c.waterbody_id and p.element_code = c.element_code and p.cycle < c.cycle
+                                   order by (p.status_rank is not null) desc, p.cycle desc, p.year desc limit 1) p on true
+  where c.rn = 1 group by c.waterbody_id;
 create index on _cls (waterbody_id);
 
 create temp table _rsn on commit drop as
@@ -115,6 +117,8 @@ insert into geo.area (kind, code, name, source_id, attrs, geom)
 select 'bridge', 'bridge:' || id, name, source_id, jsonb_strip_nulls(jsonb_build_object('length_m', length_m, 'source_keys', source_keys)), geom from core.bridge_area;
 insert into geo.area (kind, code, name, source_id, attrs, geom)
 select 'warning_area', code, name, source_id, jsonb_build_object('kind', kind), coalesce(geom_active, geom) from core.flood_area;
+insert into geo.area (kind, code, name, source_id, attrs, geom, area_km2)
+select 'nutrient_neutrality', code, name, source_id, coalesce(attrs, '{}'), geom, area_km2 from core.catchment where kind = 'nutrient_neutrality';
 insert into geo.area (kind, code, source_id, attrs, geom)
 select 'flood_zone', null, source_id, jsonb_strip_nulls(jsonb_build_object('zone', zone, 'trigger', trigger, 'reason', reason, 'ref', ref, 'fetched_at', fetched_at)), geom from core.flood_zone;
 
@@ -201,8 +205,11 @@ select s.id, s.site_id, s.parameter_id, s.source_id, s.source_series_key, s.aggr
 from core.series s join _keep k on k.id = s.site_id left join core.observation_latest l on l.series_id = s.id;
 
 insert into live.observation (series_id, observed_at, value, censor, quality)
-select o.series_id, o.observed_at, o.value, o.censor, coalesce(o.quality, 'unchecked')
+select o.series_id, o.observed_at, coalesce(o.value, case when o.censor is not null then o.detection_limit end), o.censor, coalesce(o.quality, 'unchecked')
 from core.observation o where o.series_id in (select id from live.series);
+-- a censored latest reading ("<10") carries its detection limit as the value, as the readings now do
+update live.series s set latest_value = o.value from live.observation o
+where o.series_id = s.id and o.observed_at = s.latest_at and s.latest_value is null and s.latest_censor is not null;
 
 insert into live.site_now (site_id, kind, state, rank, at, stage, flow, flow_pct, detail, updated_at)
 select g.site_id, 'gauge', g.band, g.band_rank, greatest(g.stage_at, g.flow_at), g.stage, g.flow, g.flow_pct,

@@ -36,6 +36,48 @@ NORMALS_SQL = """select m.site_id, 1 + 10 * (k - 1), array(select unnest(m.norma
 # per-gauge catchment area (km2), from the NRFA descriptors on the site
 AREA_SQL = "select id, (attrs->>'catchment_area')::float8 from geo.site where (attrs->>'catchment_area')::float8 > 0"
 
+def term_native(cur, domain):
+    """upstream spelling (lower case) -> code, for a ref.term vocabulary"""
+    cur.execute("select lower(n), code from ref.term, unnest(native) n where domain = %s", (domain,))
+    return dict(cur.fetchall())
+
+def wfd_status_map(cur):
+    """upstream WFD status spelling (lower case) -> (canonical status, rank)"""
+    cur.execute("select lower(n), code, sort from ref.term, unnest(native) n where domain = 'wfd_status'")
+    return {n: (c, r) for n, c, r in cur.fetchall()}
+
+def fold_classes(cur, stg):
+    """Merge staged WFD classifications (temp table with waterbody_id, cycle, year, element, status, certainty) into geo.waterbody.classes.
+    Per element it keeps the latest rated assessment (an unrated one only where nothing is rated) with its rank, and the previous cycle's status and rank,
+    which is what the dossiers show and compute_signals.sql scores."""
+    cur.execute(f"""
+      create temp table _fc on commit drop as
+      with staged as (select distinct on (waterbody_id, element, cycle) waterbody_id, element, cycle, year, status, certainty from {stg}
+                      order by waterbody_id, element, cycle, year desc),
+      held as (select w.id waterbody_id, c.key element, (c.value->>'cycle')::int cycle, (c.value->>'year')::int year, c.value->>'status' status, c.value->>'certainty' certainty
+               from geo.waterbody w cross join lateral jsonb_each(w.classes) c where w.id in (select waterbody_id from {stg})
+               union all
+               select w.id, c.key, null, null, c.value->>'prev', null from geo.waterbody w cross join lateral jsonb_each(w.classes) c
+               where w.id in (select waterbody_id from {stg}) and c.value ? 'prev')
+      select a.*, t.sort status_rank from (
+        select * from staged union all
+        select h.* from held h where not exists (select 1 from staged s where s.waterbody_id = h.waterbody_id and s.element = h.element and s.cycle is not distinct from h.cycle)) a
+      left join ref.term t on t.domain = 'wfd_status' and t.code = a.status""")
+    cur.execute("create index on _fc (waterbody_id, element)")
+    cur.execute("""
+      with ranked as (select *, row_number() over (partition by waterbody_id, element order by (status_rank is not null) desc, cycle desc nulls last, year desc nulls last) rn from _fc)
+      update geo.waterbody w set classes = w.classes || x.c
+      from (select c.waterbody_id, jsonb_object_agg(c.element, jsonb_strip_nulls(jsonb_build_object('status', c.status, 'rank', c.status_rank, 'year', c.year, 'cycle', c.cycle,
+                     'certainty', c.certainty, 'prev', p.status, 'prev_rank', p.status_rank))) c
+            from ranked c left join lateral (select status, status_rank from _fc p where p.waterbody_id = c.waterbody_id and p.element = c.element
+                                             and (p.cycle < c.cycle or (p.cycle is null and c.cycle is not null))
+                                             order by (p.status_rank is not null) desc, p.cycle desc nulls last, p.year desc nulls last limit 1) p on true
+            where c.rn = 1 group by c.waterbody_id) x
+      where x.waterbody_id = w.id""")
+    n = cur.rowcount
+    cur.execute("drop table _fc")
+    return n
+
 def copy_rows(cur, table, cols, rows):
     """COPY an iterable of tuples. None -> NULL. Returns row count."""
     n = 0

@@ -25,10 +25,10 @@ update geo.site s set waterbody_id = w.id
 from (
   select distinct on (s2.id) s2.id sid, w2.id
   from geo.site s2 join geo.waterbody w2 on w2.catchment_geom is not null and ST_Intersects(w2.catchment_geom, s2.geom)
-  where s2.waterbody_id is null and s2.kind not in ('rain_gauge','groundwater_station','weather_station') and s2.merged_into is null
+  where s2.waterbody_id is null and s2.kind not in ('rain_gauge','groundwater_station','weather_station')
   order by s2.id, w2.area_km2 asc nulls last
 ) w where w.sid = s.id;
 
 analyze geo.site; analyze geo.river_link;
 select kind, count(*) n, count(river_link_id) snapped, count(waterbody_id) in_wb, round(avg(snap_distance_m)::numeric) avg_snap_m
-from geo.site where merged_into is null group by 1 order by 2 desc;
+from geo.site group by 1 order by 2 desc;
