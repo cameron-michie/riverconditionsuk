@@ -96,4 +96,16 @@ def process_scene(conn, scene_id: int) -> int:
                 s.close()
     conn.commit()
     log.info("scene %s: %d/%d reaches scored", scene_id, written, len(reaches))
+    refresh_serving(conn, scene_id)
     return written
+
+
+def refresh_serving(conn, scene_id: int) -> None:
+    """Roll the scene's results into the ready-made tables the frontend reads. Never fails the scene."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("select core.refresh_eo_serving(%s)", (scene_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        log.exception("serving refresh failed for scene %s (nightly rebuild will repair)", scene_id)
