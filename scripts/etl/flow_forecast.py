@@ -62,6 +62,19 @@ with connect() as conn, conn.cursor() as cur:
     # ── starting states and parameters
     cur.execute("select site_id, beta, sd from core.flow_model_param"); PAR = {s: (np.array(b), sd) for s, b, sd in cur.fetchall()}
     med_beta = np.median([p[0] for p in PAR.values()], axis=0); med_sd = float(np.median([p[1] for p in PAR.values()]))
+    cur.execute("select site_id, doy, q from core.flow_normal"); QN = {}
+    for sid, doy, q in cur.fetchall(): QN.setdefault(sid, {})[int(doy)] = np.maximum.accumulate(np.array(q))
+    cur.execute("select site_id, value_num from core.site_attribute where key = 'catchment_area' and value_num > 1"); AREA = dict(cur.fetchall())
+    PGRID = np.linspace(0, 100, 21)
+    def flow_m3s(donors, wts, pct, day, target_area):
+        """specific discharge of the donors at this percentile and time of year (geometric mean, weights as for the state), scaled by the target's catchment area.
+        Tested leave-one-gauge-out: median error x1.8, 57% within a factor of 2 (docs/FLOW_MODEL.md)."""
+        st = min(1 + 10 * int(round((day.timetuple().tm_yday - 1) / 10)), 361); acc = tw = 0.0
+        for (g, _, _), wt in zip(donors, wts):
+            q = QN.get(g, {}).get(st); a = AREA.get(g)
+            if q is None or a is None: continue
+            acc += wt * np.log(max(float(np.interp(pct, PGRID, q)), 1e-6) / a); tw += wt
+        return float(target_area * np.exp(acc / tw)) if tw > 0 and target_area else None
     cur.execute("select entity_id, basis from core.signal where signal_code = 'flow' and entity_kind = 'waterbody'")
     rows_wf, nfc = [], 0
     def forecast(z0, beta, w):
@@ -87,24 +100,25 @@ with connect() as conn, conn.cursor() as cur:
             sw = sum(h[0] for h in have); beta = sum(h[0] * h[1][0] for h in have) / sw; sd = sum(h[0] * h[1][1] for h in have) / sw
         else: beta, sd = med_beta, med_sd
         method = "measured" if b.get("method") == "measured" and b.get("on_stretch") else "transfer"
-        rows_wf.append((wid, issued, now.replace(minute=0), float(100 * norm.cdf(z0)), method, b.get("confidence"), json.dumps({"sd_z": round(sd, 3), "state": b.get("method"), "donors": [d[0] for d in donors]})))
+        A_t = AREA.get(donors[0][0]) if method == "measured" else g["up_area"].get(wid)       # a gauge on the stretch: its own area; otherwise the drainage graph's upstream area
+        rows_wf.append((wid, issued, now.replace(minute=0), float(100 * norm.cdf(z0)), method, b.get("confidence"), json.dumps({"sd_z": round(sd, 3), "state": b.get("method"), "donors": [d[0] for d in donors], "area_km2": round(A_t, 1) if A_t else None, "q_factor": 1.3 if method == "measured" else 2.0}),
+                        flow_m3s(donors, wts, 100 * norm.cdf(z0), now.date(), A_t)))
         for j, z in enumerate(forecast(z0, beta, wid), 1):
             valid = dt.datetime.combine(days[I0 + j], dt.time(DAY_H + 12), UTC)
             rows_wf.append((wid, issued, valid, float(100 * norm.cdf(z)), "rain_routed", "low" if j > 3 or b.get("confidence") == "low" else b.get("confidence") or "medium",
-                            json.dumps({"sd_z": round(sd * np.sqrt(j), 3), "lead_days": j, "donors": [d[0] for d in donors]})))
-    cur.execute("create temp table stg_wf (w bigint, i timestamptz, v timestamptz, pct real, m text, c text, basis jsonb) on commit drop")
-    copy_rows(cur, "stg_wf", ["w", "i", "v", "pct", "m", "c", "basis"], rows_wf)
-    cur.execute("""insert into core.waterbody_flow (waterbody_id, issued_at, valid_at, flow_pct, method, confidence, basis) select w, i, v, pct, m, c, basis from stg_wf
-                   on conflict (waterbody_id, issued_at, valid_at) do update set flow_pct = excluded.flow_pct, method = excluded.method, confidence = excluded.confidence, basis = excluded.basis""")
+                            json.dumps({"sd_z": round(sd * np.sqrt(j), 3), "lead_days": j, "donors": [d[0] for d in donors], "area_km2": round(A_t, 1) if A_t else None, "q_factor": 1.3 if method == "measured" else 2.0}),
+                            flow_m3s(donors, wts, 100 * norm.cdf(z), days[I0 + j], A_t)))
+    cur.execute("create temp table stg_wf (w bigint, i timestamptz, v timestamptz, pct real, m text, c text, basis jsonb, q double precision) on commit drop")
+    copy_rows(cur, "stg_wf", ["w", "i", "v", "pct", "m", "c", "basis", "q"], rows_wf)
+    cur.execute("""insert into core.waterbody_flow (waterbody_id, issued_at, valid_at, flow_pct, flow_m3s, method, confidence, basis) select w, i, v, pct, q, m, c, basis from stg_wf
+                   on conflict (waterbody_id, issued_at, valid_at) do update set flow_pct = excluded.flow_pct, flow_m3s = excluded.flow_m3s, method = excluded.method, confidence = excluded.confidence, basis = excluded.basis""")
     cur.execute("delete from core.waterbody_flow where issued_at < %s", (issued - dt.timedelta(hours=3),))
     # ── gauges: flow in m3/s with a band, via the seasonal quantiles
     cur.execute("""select distinct on (se.site_id) se.site_id, se.id, s.waterbody_id from core.series se join ref.parameter p on p.id = se.parameter_id and p.code = 'river_flow'
                    join core.observation_latest l on l.series_id = se.id join core.site s on s.id = se.site_id
                    where l.observed_at > now() - interval '3 days' and l.value is not null order by se.site_id, (se.interval_s = 900) desc, l.observed_at desc""")
     gauges = cur.fetchall(); cur.execute("select site_id, flow_pct from core.gauge_state where flow_pct is not null"); GP = dict(cur.fetchall())
-    cur.execute("select site_id, doy, q from core.flow_normal"); QN = {}
-    for sid, doy, q in cur.fetchall(): QN.setdefault(sid, {})[int(doy)] = np.maximum.accumulate(np.array(q))
-    pgrid = np.linspace(0, 100, 21); rows_f = []
+    pgrid = PGRID; rows_f = []
     for sid, ser, wid in gauges:
         if sid not in PAR or wid not in ix or sid not in GP: continue
         beta, sd = PAR[sid]; z0 = float(pct_to_z(GP[sid]))

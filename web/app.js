@@ -396,8 +396,9 @@ async function flowOutlook(id, seq) {
   const el = $("#fo"); if (!el) return; const o = await rpc("flow_outlook", { p_waterbody: id }).catch(() => null);
   if (seq !== panelSeq || !o || !o.days || o.days.length < 2 || !$("#fo")) return;
   const chips = o.days.map((x, i) => { const b = Math.max(0, FBAND.indexOf(x.band)) + 1, d = new Date(x.at);
-    return `<span class="rk" style="border-left-color:${FLOWCOL[b]}"><b>${i === 0 ? "Now" : d.toLocaleDateString("en-GB", { weekday: "short" })}</b> ${esc(x.label || x.band)}${x.confidence === "low" && i > 0 ? ` <span class="dim">·</span>` : ""}</span>`; }).join("");
-  $("#fo").innerHTML = `<h2>Flow, next days${tag("modelled")}</h2><div class="rks">${chips}</div><div class="dim" style="margin:4px 0 8px">Against normal for the time of year. Modelled from forecast rain and nearby gauges; the further ahead, the less certain.</div>`;
+    return `<span class="rk" style="border-left-color:${FLOWCOL[b]}"><b>${i === 0 ? "Now" : d.toLocaleDateString("en-GB", { weekday: "short" })}</b> ${esc(x.label || x.band)}${x.q != null ? `<br><span class="dim">about ${Number(x.q).toPrecision(2)} m³/s</span>` : ""}</span>`; }).join("");
+  const f = o.days[0]?.q_factor;
+  $("#fo").innerHTML = `<h2>Flow, next days${tag("modelled")}</h2><div class="rks">${chips}</div><div class="dim" style="margin:4px 0 8px">Against normal for the time of year. Modelled from forecast rain and nearby gauges; the further ahead, the less certain.${f ? ` Flow in m³/s is an estimate, typically within a factor of ${f}${o.area_km2 ? `, for about ${nf(Math.round(o.area_km2))} km² of catchment` : ""}.` : ""}</div>`;
 }
 const geomCache = new Map();
 async function openRiver(slug, fitTo) {

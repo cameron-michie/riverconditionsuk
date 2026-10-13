@@ -20,3 +20,16 @@ State is the normal score `z` of the flow's seasonal percentile (`core.flow_norm
 | 5 days | 0.57 | 0.32 | 0.73 | 0.47 |
 
 Caveats: these use observed catchment rain, so real forecasts (ECMWF rain) will do worse than the table. The ungauged starting-state error (about 0.4 z, roughly 12 percentile points) dominates at short range and is unchanged from the previous estimate. Reproduce with `flow_model_fit.py` and `flow_model_transfer_eval.py`.
+
+## Flow in m³/s
+Every river waterbody also gets a flow in m³/s (`core.waterbody_flow.flow_m3s`): the neighbouring gauges' seasonal flow at the same percentile, per km² of their catchment (geometric mean, same weights as the state), times the waterbody's upstream area from the drainage graph. Where a gauge sits on the stretch its own flow and area are used.
+
+Tested leave-one-gauge-out over 29,662 gauge-days on 1,200 gauges (`scripts/etl/flow_scale_eval.py`; the percentile is the estimated one, the area the graph's):
+
+| setup | median error | within 1.5x | within 2x |
+|---|---|---|---|
+| true NRFA area, true percentile (scaling error alone) | x1.29 | 67% | 84% |
+| true area, estimated percentile | x1.41 | 56% | 75% |
+| **graph area, estimated percentile (what the map uses)** | **x1.76** | **40%** | **57%** |
+
+So for an ungauged river expect the right order of magnitude and often better, not a measurement; the panel says "typically within a factor of 2". Most of the loss is the upstream area (a gauge sits partway along its waterbody); a better area, for example from a DEM, is the next improvement. NRW's APIs give river level and rainfall only, so Welsh flow comes through the NRFA gauges and this model.
