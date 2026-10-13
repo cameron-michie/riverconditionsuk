@@ -52,7 +52,7 @@ with connect() as conn, conn.cursor() as cur:
 import subprocess
 root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 env = dict(os.environ, PYTHONPATH=root); here = os.path.dirname(os.path.abspath(__file__)); failed = []
-for script, cwd in (("flood_forecast.py", os.path.join(root, "collect")), ("load_flood.py", here), ("refresh_flood_zones.py", here)):
+for script, cwd in (("flood_forecast.py", os.path.join(root, "collect")), ("load_flood.py", here)):                  # flood zones are their own job (flood_zones): up to ~2 min when many warnings are active
     p = subprocess.run([sys.executable, "-W", "ignore", script], cwd=cwd, env=env, capture_output=True, text=True)
     if p.returncode: failed.append(script); print("FAILED", script, (p.stderr or p.stdout)[-400:])
 print("done", round(time.time() - t0, 1), "s")

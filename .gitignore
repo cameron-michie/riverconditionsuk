@@ -14,3 +14,5 @@ data/
 supabase/compute/rivers-etl/app/
 /data
 /.venv
+AWSCLIV2.pkg
+web/.claude/

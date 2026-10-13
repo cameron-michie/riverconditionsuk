@@ -41,7 +41,7 @@ with connect() as conn, conn.cursor() as cur:
         print("stage scales", len(rows))
     # ── NRFA flood statistics
     rows = []
-    for st in L("nrfa/station_info.json")["data"]:
+    for st in (L("nrfa/station_info.json")["data"] if os.path.exists(os.path.join(RAW, "nrfa", "station_info.json")) else []):      # static NRFA file; absent on compute, QMED is already in the database
         sid = BYNRFA.get(str(st["id"]))
         if not sid: continue
         for k in ("qmed", "gdf-q05-flow", "gdf-q10-flow", "gdf-q50-flow", "gdf-q95-flow"):

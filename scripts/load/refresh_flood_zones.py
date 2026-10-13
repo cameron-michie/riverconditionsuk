@@ -4,6 +4,14 @@ import json, os, sys, time
 sys.path[:0] = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")]
 import lib
 from db import *
+from shapely import wkt as swkt
+from shapely.geometry import shape, MultiPolygon
+from shapely.validation import make_valid
+def polygons(g):
+    if g.is_empty: return
+    if g.geom_type == 'Polygon': yield g
+    elif g.geom_type in ('MultiPolygon', 'GeometryCollection'):
+        for x in g.geoms: yield from polygons(x)
 B = "https://environment.data.gov.uk/spatialdata/flood-map-for-planning-flood-zones/ogc/features/v1/collections/Flood_Zones_2_3_Rivers_and_Sea/items"
 t0 = time.time()
 def fetch(bb, cap=4000):
@@ -41,13 +49,15 @@ with connect() as conn, conn.cursor() as cur:
                 z = (f["properties"].get("flood_zone") or "").upper()
                 if z in ("FZ2", "FZ3") and f.get("geometry"): rows.append((z, json.dumps(f["geometry"])))
         if not rows: continue
-        cur.execute("create temp table if not exists stg_z (zone text, g text, wkt text) on commit drop"); cur.execute("truncate stg_z")
-        copy_rows(cur, "stg_z", ["zone", "g", "wkt"], ((z, g, wkt) for z, g in rows))
-        cur.execute("""insert into geo.area (kind, geom, attrs, source_id)
-            select 'flood_zone', ST_Multi(ST_CollectionExtract(ST_MakeValid(ST_Intersection(ST_MakeValid(zg), ST_GeomFromText(%s, 4326))), 3)),
-                   jsonb_build_object('zone', zone, 'trigger', %s::text, 'reason', %s::text, 'ref', %s::text, 'fetched_at', now()), %s
-            from (select zone, ST_SetSRID(ST_GeomFromGeoJSON(g), 4326) zg from stg_z) q
-            where ST_Intersects(ST_MakeValid(zg), ST_GeomFromText(%s, 4326))""", (wkt, trig, reason, ref, src, wkt)); n += len(rows)
+        # clip each zone polygon to the risk area here, not in the database: PostGIS ST_Intersection on these polygons ties up a managed database for minutes
+        clip = make_valid(swkt.loads(wkt)); out = []
+        for z, g in rows:
+            try: inter = make_valid(shape(json.loads(g))).intersection(clip)
+            except Exception: continue
+            parts = list(polygons(inter))
+            if parts: out.append((MultiPolygon(parts).wkb, z, trig, reason, ref, src))
+        cur.executemany("""insert into geo.area (kind, geom, attrs, source_id) values ('flood_zone', ST_SetSRID(ST_GeomFromWKB(%s), 4326),
+                   jsonb_build_object('zone', %s::text, 'trigger', %s::text, 'reason', %s::text, 'ref', %s::text, 'fetched_at', now()), %s)""", out); n += len(rows)
         cur.execute("delete from geo.area where kind = 'flood_zone' and ST_IsEmpty(geom)")
     cur.execute("select attrs->>'trigger', attrs->>'zone', count(*), round((sum(ST_Area(ST_Transform(geom, 27700))) / 1e6)::numeric, 1) from geo.area where kind = 'flood_zone' group by 1, 2 order by 1, 2"); print("flood zone polygons (trigger, zone, n, km2):", cur.fetchall())
     conn.commit()

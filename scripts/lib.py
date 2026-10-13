@@ -25,7 +25,7 @@ def _throttle(url):
 # Edge Function pinned to London (x-region: the EA also blocks US egress, and a function otherwise runs near its caller) (supabase/functions/eaproxy). Everything else, and every local run, is untouched.
 PROXY, PTOK = os.environ.get("EA_PROXY_URL"), os.environ.get("EA_PROXY_TOKEN")
 def _via_proxy(url, params, headers):
-    if PROXY and (url.startswith("https://environment.data.gov.uk/hydrology") or url.startswith("https://environment.data.gov.uk/doc/")):
+    if PROXY and (url.startswith(("https://environment.data.gov.uk/hydrology", "https://environment.data.gov.uk/doc/", "https://environment.data.gov.uk/spatialdata/"))):
         return PROXY, {"u": str(httpx.URL(url).copy_merge_params(params or {}))}, {**(headers or {}), "x-etl-token": PTOK, "x-region": os.environ.get("EA_PROXY_REGION", "eu-west-2")}
     return url, params, headers
 
