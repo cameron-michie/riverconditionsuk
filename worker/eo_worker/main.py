@@ -81,7 +81,10 @@ def worker():
                 conn.commit()
                 state["scenes_done"] += 1
                 state["last_job"] = time.time()
-            # on error the message becomes visible again after VISIBILITY_S (retry)
+            else:   # retry sooner than the long in-flight timeout
+                with conn.cursor() as cur:
+                    cur.execute("select pgmq.set_vt(%s, %s, 300)", (config.QUEUE, msg_id))
+                conn.commit()
 
 
 def bootstrap(conn):
@@ -91,6 +94,8 @@ def bootstrap(conn):
         cur.execute("select 1 from pgmq.list_queues() where queue_name = %s", (config.QUEUE,))
         if not cur.fetchone():
             cur.execute("select pgmq.create(%s)", (config.QUEUE,))
+        # single instance: a restart means whoever held in-flight messages is dead, so release them now
+        cur.execute("update pgmq.q_eo_jobs set vt = now() where vt > now()")
         cur.execute(
             """select s.id from core.scene s
                where s.acquired_at > now() - make_interval(days => %s)
