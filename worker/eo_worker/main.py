@@ -1,6 +1,7 @@
 """Always-on EO worker: watches STAC for new scenes, drains the pgmq `eo_jobs` queue, serves /health."""
 from __future__ import annotations
 
+import json
 import logging
 import signal
 import threading
@@ -83,13 +84,46 @@ def worker():
             # on error the message becomes visible again after VISIBILITY_S (retry)
 
 
+def bootstrap(conn):
+    """Idempotent start-up: ensure the queue exists and every recent unscored scene has a job."""
+    with conn.cursor() as cur:
+        cur.execute("select pg_advisory_xact_lock(hashtext('eo_worker_bootstrap'))")   # serialise concurrent starts
+        cur.execute("select 1 from pgmq.list_queues() where queue_name = %s", (config.QUEUE,))
+        if not cur.fetchone():
+            cur.execute("select pgmq.create(%s)", (config.QUEUE,))
+        cur.execute(
+            """select s.id from core.scene s
+               where s.acquired_at > now() - make_interval(days => %s)
+                 and not exists (select 1 from core.eo_observation o where o.scene_id = s.id)
+                 and not exists (select 1 from pgmq.q_eo_jobs q where (q.message->>'scene_id')::bigint = s.id)
+                 and not exists (select 1 from pgmq.a_eo_jobs a where (a.message->>'scene_id')::bigint = s.id)""",
+            (config.BACKFILL_DAYS,),
+        )
+        for (sid,) in cur.fetchall():
+            cur.execute("select pgmq.send(%s, %s::jsonb)", (config.QUEUE, json.dumps({"scene_id": sid})))
+    conn.commit()
+
+
 def main():
     for s in (signal.SIGTERM, signal.SIGINT):
         signal.signal(s, lambda *_: stop.set())
-    threading.Thread(target=watcher, daemon=True).start()
     srv = HTTPServer(("0.0.0.0", config.HEALTH_PORT), Health)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    worker()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()   # up first so Compute sees a healthy port
+    while not stop.is_set():
+        try:
+            with psycopg.connect(config.DATABASE_URL) as conn:
+                bootstrap(conn)
+            break
+        except Exception:
+            log.exception("bootstrap failed; retrying in 60s")
+            stop.wait(60)
+    threading.Thread(target=watcher, daemon=True).start()
+    while not stop.is_set():
+        try:
+            worker()
+        except Exception:
+            log.exception("worker loop crashed; restarting in 30s")
+            stop.wait(30)
 
 
 if __name__ == "__main__":
