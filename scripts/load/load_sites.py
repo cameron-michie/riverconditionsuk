@@ -14,7 +14,7 @@ with connect() as conn, conn.cursor() as cur:
     sites = {}                 # id -> dict
     ident = {}                 # (scheme, value) -> (site_id, source, method, conf)
     def alloc(n):
-        cur.execute("select nextval(pg_get_serial_sequence('core.site','id')) from generate_series(1,%s)", (n,)); return [r[0] for r in cur.fetchall()]
+        cur.execute("select nextval(pg_get_serial_sequence('geo.site','id')) from generate_series(1,%s)", (n,)); return [r[0] for r in cur.fetchall()]
     pool = alloc(400000); pool.reverse()
     stats = collections.Counter()
     def site(kind, name, lon, lat, ids, src, country=None, status="unknown", opened=None, closed=None, river=None, operator=None, attrs=None, method="native"):
@@ -194,7 +194,7 @@ with connect() as conn, conn.cursor() as cur:
     def yd(x): return x if isinstance(x, str) and re.match(r"^\d{4}-\d{2}-\d{2}", x) else None
     copy_rows(cur, "stg_site", ["id", "kind", "name", "lon", "lat", "country", "status", "opened", "closed", "river", "operator", "src", "attrs"],
               ((i, d["kind"], d["name"], d["lon"], d["lat"], d["country"], d["status"], yd(d["opened"]), yd(d["closed"]), d["river"], d["operator"], d["src"], jdump({k: v for k, v in d["attrs"].items() if v is not None})) for i, d in sites.items()))
-    cur.execute("""insert into core.site (id, kind, name, geom, geom_bng, country, operator_id, status, opened_on, closed_on, river_name_raw, primary_source_id, attrs)
+    cur.execute("""insert into geo.site (id, kind, name, geom, geom_bng, country, operator_id, status, opened_on, closed_on, river_name_raw, primary_source_id, attrs)
         overriding system value
         select id, kind, name, ST_SetSRID(ST_MakePoint(lon, lat), 4326),
                case when lon between -9 and 2.5 and lat between 49.5 and 61 then ST_Transform(ST_SetSRID(ST_MakePoint(lon, lat), 4326), 27700) end,
@@ -202,22 +202,22 @@ with connect() as conn, conn.cursor() as cur:
         from stg_site where lon between -11 and 3 and lat between 49 and 61.5""")
     cur.execute("create temp table stg_id (scheme text, value text, site_id bigint, src bigint, method text, conf real) on commit drop")
     copy_rows(cur, "stg_id", ["scheme", "value", "site_id", "src", "method", "conf"], ((a, b, v[0], v[1], v[2], v[3]) for (a, b), v in ident.items() if v[0] in sites))
-    cur.execute("insert into core.site_identifier (scheme, value, site_id, source_id, match_method, confidence) select s.scheme, s.value, s.site_id, s.src, s.method, s.conf from stg_id s join core.site c on c.id = s.site_id on conflict do nothing")
+    cur.execute("insert into geo.site_key (scheme, value, site_id, source_id, match_method, confidence) select s.scheme, s.value, s.site_id, s.src, s.method, s.conf from stg_id s join geo.site c on c.id = s.site_id on conflict do nothing")
     # overflow table
     cur.execute("create temp table stg_ov (site_id bigint, company bigint, permit text, asset text, recv text, wb text, bathing text, shellfish text, legacy text[]) on commit drop")
     copy_rows(cur, "stg_ov", ["site_id", "company", "permit", "asset", "recv", "wb", "bathing", "shellfish", "legacy"],
               ((i, o["company"], o["permit"], o["asset"], o["recv"], o["wb"], o["bathing"], o["shellfish"], o["legacy"]) for i, o in overflow_attr.items()))
     cur.execute("""insert into core.overflow (site_id, company_id, permit_ref, asset_type, receiving_water_raw, receiving_waterbody_id, legacy_ids, is_shellfish_water)
         select s.site_id, s.company, s.permit, s.asset, s.recv, w.id, s.legacy, case when s.shellfish is null then null else lower(s.shellfish) in ('y','yes','true','1') end
-        from stg_ov s join core.site c on c.id = s.site_id left join core.waterbody w on w.wb_code = s.wb on conflict do nothing""")
+        from stg_ov s join geo.site c on c.id = s.site_id left join geo.waterbody w on w.wb_code = s.wb on conflict do nothing""")
     cur.execute("create temp table stg_live (site_id bigint, status text, raw text, since text, st text, en text, rep text, src bigint) on commit drop")
     copy_rows(cur, "stg_live", ["site_id", "status", "raw", "since", "st", "en", "rep", "src"], ((i, v["status"], v["raw"], v["since"], v["st"], v["en"], v["rep"], v["src"]) for i, v in live.items()))
     cur.execute("""insert into core.overflow_status (site_id, status, raw_status, status_since, last_event_start, last_event_end, reported_at, fetched_at, source_id)
-        select s.site_id, s.status, s.raw, s.since::timestamptz, s.st::timestamptz, s.en::timestamptz, s.rep::timestamptz, now(), s.src from stg_live s join core.site c on c.id = s.site_id on conflict do nothing""")
+        select s.site_id, s.status, s.raw, s.since::timestamptz, s.st::timestamptz, s.en::timestamptz, s.rep::timestamptz, now(), s.src from stg_live s join geo.site c on c.id = s.site_id on conflict do nothing""")
     cur.execute("create temp table stg_an (site_id bigint, year smallint, spills numeric, hours numeric, opct numeric, lt numeric, has boolean, q text, src bigint) on commit drop")
     copy_rows(cur, "stg_an", ["site_id", "year", "spills", "hours", "opct", "lt", "has", "q", "src"], ((k[0], k[1], v["spills"], v["hours"], v["opct"], v["lt"], v["has"], jdump(v["q"]), S["ea_edm_annual"]) for k, v in annual.items()))
     cur.execute("""insert into core.discharge_annual (site_id, year, source_id, spill_count, total_duration_hr, edm_operating_pct, longterm_avg_spills, has_data, qualifiers)
-        select s.site_id, s.year, s.src, s.spills::int, s.hours, s.opct, s.lt, s.has, s.q::jsonb from stg_an s join core.site c on c.id = s.site_id on conflict do nothing""")
+        select s.site_id, s.year, s.src, s.spills::int, s.hours, s.opct, s.lt, s.has, s.q::jsonb from stg_an s join geo.site c on c.id = s.site_id on conflict do nothing""")
     # bathing: assessments
     cur.execute("create temp table stg_bw (site_id bigint, year smallint, cls text, src bigint) on commit drop")
     rows = []
@@ -226,14 +226,14 @@ with connect() as conn, conn.cursor() as cur:
         about = ca.get("_about", ""); m = re.search(r"/year/(\d{4})", about); cn = ((ca.get("complianceClassification") or {}).get("name") or {}).get("_value")
         if m and cn: rows.append((sid, int(m.group(1)), cn.lower(), S["ea_bathing"]))
     copy_rows(cur, "stg_bw", ["site_id", "year", "cls", "src"], rows)
-    cur.execute("insert into core.bathing_assessment (site_id, year, classification, rank, source_id) select s.site_id, s.year, case when s.cls in ('excellent','good','sufficient','poor') then s.cls else 'not_classified' end, case s.cls when 'excellent' then 1 when 'good' then 2 when 'sufficient' then 3 when 'poor' then 4 end, s.src from stg_bw s join core.site c on c.id=s.site_id on conflict do nothing")
+    cur.execute("insert into core.bathing_assessment (site_id, year, classification, rank, source_id) select s.site_id, s.year, case when s.cls in ('excellent','good','sufficient','poor') then s.cls else 'not_classified' end, case s.cls when 'excellent' then 1 when 'good' then 2 when 'sufficient' then 3 when 'poor' then 4 end, s.src from stg_bw s join geo.site c on c.id=s.site_id on conflict do nothing")
     # permits
     cur.execute("create temp table stg_pm (site_id bigint, ref text, ver int, holder bigint, dtype text, renv text, rwater text, status text, issued text, eff text, rev text, src bigint) on commit drop")
     ep = lambda x: __import__("datetime").datetime.fromtimestamp(x / 1000, __import__("datetime").timezone.utc).date().isoformat() if isinstance(x, (int, float)) else None
     copy_rows(cur, "stg_pm", ["site_id", "ref", "ver", "holder", "dtype", "renv", "rwater", "status", "issued", "eff", "rev", "src"],
               ((sid, p.get("PERMIT_NUMBER"), p.get("PERMIT_VERSION"), ORG.get((p.get("COMPANY_NAME") or "").lower()), p.get("DSI_TYPE_DESCRIPTION"), p.get("REC_ENV_CODE_DESCRIPTION"), p.get("RECEIVING_WATER"), p.get("STATUS_OF_PERMIT"), ep(p.get("ISSUED_DATE")), ep(p.get("EFFECTIVE_DATE")), ep(p.get("REVOCATION_DATE")), S["castco_pressures"]) for sid, p in permits if p.get("PERMIT_NUMBER")))
     cur.execute("""insert into core.permit (permit_ref, version, site_id, holder_id, discharge_type, receiving_environment, receiving_water_raw, status, issued_on, effective_on, revoked_on, source_id)
-        select s.ref, s.ver, s.site_id, s.holder, s.dtype, s.renv, s.rwater, s.status, s.issued::date, eff::date, rev::date, src from stg_pm s join core.site c on c.id = s.site_id on conflict do nothing""")
+        select s.ref, s.ver, s.site_id, s.holder, s.dtype, s.renv, s.rwater, s.status, s.issued::date, eff::date, rev::date, src from stg_pm s join geo.site c on c.id = s.site_id on conflict do nothing""")
     # NRFA attributes
     cur.execute("create temp table stg_at (site_id bigint, key text, num double precision, txt text, src bigint) on commit drop")
     rows = []
@@ -247,7 +247,7 @@ with connect() as conn, conn.cursor() as cur:
             if isinstance(v, (int, float)): rows.append((sid, k.replace("-", "_"), float(v), None, S["nrfa"]))
             else: rows.append((sid, k.replace("-", "_"), None, str(v), S["nrfa"]))
     copy_rows(cur, "stg_at", ["site_id", "key", "num", "txt", "src"], rows)
-    cur.execute("insert into core.site_attribute (site_id, key, value_num, value_text, source_id) select site_id, key, num, txt, src from stg_at s where exists (select 1 from core.site c where c.id=s.site_id) on conflict do nothing")
+    cur.execute("insert into core.site_attribute (site_id, key, value_num, value_text, source_id) select site_id, key, num, txt, src from stg_at s where exists (select 1 from geo.site c where c.id=s.site_id) on conflict do nothing")
     for tbl in ("site", "site_identifier", "overflow", "overflow_status", "discharge_annual", "bathing_assessment", "permit", "site_attribute"):
         cur.execute(f"select count(*) from core.{tbl}"); print(tbl, cur.fetchone()[0])
     conn.commit()

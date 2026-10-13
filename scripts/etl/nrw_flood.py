@@ -1,5 +1,5 @@
-"""NRW live flood warnings (GeoJSON) and flood risk forecast (list of areas at risk). Records each poll in ingest.run and saves any non-empty response raw,
-because the real field names are not published and both feeds are empty in quiet weather. Loading into core.flood_warning / core.flood_forecast follows once a real response is on disk."""
+"""NRW live flood warnings (GeoJSON) and flood risk forecast (list of areas at risk). Records each poll in ops.etl_run and saves any non-empty response raw,
+because the real field names are not published and both feeds are empty in quiet weather. Loading into live.flood follows once a real response is on disk."""
 import datetime as dt, json, os, sys
 import common, lib
 from db import connect, source_id, start_run, finish_run

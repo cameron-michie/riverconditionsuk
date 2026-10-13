@@ -1,5 +1,5 @@
 """Leave-one-gauge-out test of the regionalised model: the target gauge is treated as ungauged. Its starting state and parameters come from the nearest donors
-(inverse-distance and river-size weighting, as in core.refresh_flow_signals); its own catchment rain drives the forecast. Compared with holding the donors' state constant."""
+(inverse-distance and river-size weighting, as in live.refresh_flow_signals); its own catchment rain drives the forecast. Compared with holding the donors' state constant."""
 import json, os, sys, time
 sys.path[:0] = [os.path.dirname(os.path.abspath(__file__))]
 import numpy as np, pandas as pd
@@ -8,9 +8,9 @@ from scipy.spatial import cKDTree
 
 RADII = [60, 100, 150]
 with connect() as conn, conn.cursor() as cur:
-    cur.execute("select s.value, s.site_id, ST_X(si.geom), ST_Y(si.geom), coalesce(l.size_class, 0) from core.site_identifier s join core.site si on si.id = s.site_id left join core.river_link l on l.id = si.river_link_id where s.scheme = 'nrfa:id'")
+    cur.execute("select s.value, s.site_id, ST_X(si.geom), ST_Y(si.geom), coalesce(l.size_class, 0) from geo.site_key s join geo.site si on si.id = s.site_id left join geo.river_link l on l.id = si.river_link_id where s.scheme = 'nrfa:id'")
     INFO = {v: (sid, x, y, sz) for v, sid, x, y, sz in cur.fetchall()}
-    cur.execute("select site_id, doy, q from core.flow_normal"); QT = {}
+    cur.execute(NORMALS_SQL); QT = {}
     for sid, doy, q in cur.fetchall(): QT.setdefault(sid, {})[int(doy)] = q
 P = {int(k): v for k, v in json.load(open(os.path.join(lib.ROOT, "..", "flow_model_params.json"))).items()}
 ids = [i for i, (sid, *_r) in INFO.items() if sid in P and os.path.exists(os.path.join(RAW, "nrfa", "cdr", f"{i}.json"))]

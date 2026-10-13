@@ -10,9 +10,9 @@ from flow_model_fit import *
 import wb_graph
 
 with connect() as conn, conn.cursor() as cur:
-    cur.execute("select s.value, s.site_id, ST_X(si.geom), ST_Y(si.geom), si.waterbody_id from core.site_identifier s join core.site si on si.id = s.site_id where s.scheme = 'nrfa:id'"); INFO = {v: (sid, x, y, w) for v, sid, x, y, w in cur.fetchall()}
-    cur.execute("select site_id, value_num from core.site_attribute where key = 'catchment_area'"); AREA = dict(cur.fetchall())
-    cur.execute("select site_id, doy, q from core.flow_normal"); QT = {}
+    cur.execute("select s.value, s.site_id, ST_X(si.geom), ST_Y(si.geom), si.waterbody_id from geo.site_key s join geo.site si on si.id = s.site_id where s.scheme = 'nrfa:id'"); INFO = {v: (sid, x, y, w) for v, sid, x, y, w in cur.fetchall()}
+    cur.execute(AREA_SQL); AREA = dict(cur.fetchall())
+    cur.execute(NORMALS_SQL); QT = {}
     for sid, doy, q in cur.fetchall(): QT.setdefault(sid, {})[int(doy)] = np.maximum.accumulate(np.array(q))
     G = wb_graph.build(cur)
 ids = [i for i, (sid, *_r) in INFO.items() if sid in QT and AREA.get(sid, 0) > 1 and os.path.exists(os.path.join(RAW, "nrfa", "gdf", f"{i}.json"))]

@@ -1,4 +1,4 @@
-"""Derive core.river from topology + names; compute strahler & dist_to_mouth; build tributary tree."""
+"""Derive geo.river from topology + names; compute strahler & dist_to_mouth; build tributary tree."""
 import re, time, collections
 from db import *
 
@@ -13,10 +13,10 @@ ALIAS = {
 def slug(s): return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
 t0 = time.time()
 with connect() as conn, conn.cursor() as cur:
-    cur.execute("update core.river_link set river_id = null"); cur.execute("update core.site set river_id = null where river_id is not null"); cur.execute("update core.survey set river_id = null where river_id is not null")
-    cur.execute("truncate core.waterbody_river"); cur.execute("delete from core.signal where entity_kind = 'river'"); cur.execute("delete from research.work_place where place_kind = 'river' and method = 'rule'")
-    cur.execute("delete from core.river_alias"); cur.execute("delete from core.river")
-    cur.execute("select id, name, start_node_id, end_node_id, coalesce(length_m,0), form, flow_direction from core.river_link")
+    cur.execute("update geo.river_link set river_id = null"); cur.execute("update geo.site set river_id = null where river_id is not null"); cur.execute("update core.survey set river_id = null where river_id is not null")
+    cur.execute("truncate core.waterbody_river"); cur.execute("delete from live.signal where entity_kind = 'river'"); cur.execute("delete from research.work_place where place_kind = 'river' and method = 'rule'")
+    cur.execute("delete from core.river_alias"); cur.execute("delete from geo.river")
+    cur.execute("select id, name, start_node_id, end_node_id, coalesce(length_m,0), form, flow_direction from geo.river_link")
     L = cur.fetchall()
     cur.execute("select id, ST_X(geom), ST_Y(geom), category from core.river_node")
     rows_n = cur.fetchall(); XY = {i: (x, y) for i, x, y, c in rows_n}; CAT = {i: c for i, x, y, c in rows_n}
@@ -138,15 +138,15 @@ with connect() as conn, conn.cursor() as cur:
     cur.execute("create temp table stg_river (ord int, slug text, name text, name_cy text, mouth_node_id bigint, source_node_id bigint, length_km double precision, strahler_max smallint) on commit drop")
     copy_rows(cur, "stg_river", ["ord", "slug", "name", "name_cy", "mouth_node_id", "source_node_id", "length_km", "strahler_max"],
               ((i, r[0], r[1], r[2], r[3], r[4], r[5], r[6]) for i, r in enumerate(rivers)))
-    cur.execute("""insert into core.river (slug, name, name_cy, mouth_node_id, source_node_id, length_km, strahler_max)
+    cur.execute("""insert into geo.river (slug, name, name_cy, mouth_node_id, source_node_id, length_km, strahler_max)
                    select slug, name, name_cy, mouth_node_id, source_node_id, length_km, strahler_max from stg_river order by ord""")
-    cur.execute("select slug, id from core.river"); rid_of_slug = dict(cur.fetchall())
+    cur.execute("select slug, id from geo.river"); rid_of_slug = dict(cur.fetchall())
     link_river = {}
     for r in rivers:
         for i in r[7]: link_river[i] = rid_of_slug[r[0]]
     cur.execute("create temp table stg_lr (link_id bigint, river_id bigint, strahler smallint, dist double precision) on commit drop")
     copy_rows(cur, "stg_lr", ["link_id", "river_id", "strahler", "dist"], ((lid[i], link_river.get(i), strahler[i] or None, dist[i]) for i in range(n)))
-    cur.execute("""update core.river_link l set river_id = t.river_id, strahler = t.strahler, dist_to_mouth_m = t.dist
+    cur.execute("""update geo.river_link l set river_id = t.river_id, strahler = t.strahler, dist_to_mouth_m = t.dist
                    from stg_lr t where t.link_id = l.id""")
 
     # ── tributary tree: from each river's mouth, walk downstream (<=40 hops) to the first link of a different river
@@ -163,16 +163,16 @@ with connect() as conn, conn.cursor() as cur:
         if found: parent_of[me] = found
     cur.execute("create temp table stg_par (id bigint, parent bigint) on commit drop")
     copy_rows(cur, "stg_par", ["id", "parent"], parent_of.items())
-    cur.execute("update core.river r set parent_river_id = p.parent from stg_par p where p.id = r.id")
+    cur.execute("update geo.river r set parent_river_id = p.parent from stg_par p where p.id = r.id")
 
     # aliases (Welsh/English)
     cur.execute("""insert into core.river_alias (river_id, alias, lang)
-                   select id, name_cy, 'cy' from core.river where name_cy is not null
-                   union select id, name, 'en' from core.river where name_cy is not null on conflict do nothing""")
+                   select id, name_cy, 'cy' from geo.river where name_cy is not null
+                   union select id, name, 'en' from geo.river where name_cy is not null on conflict do nothing""")
     # geometry: merge + simplify (~30 m) for display
-    cur.execute("""update core.river r set geom = g.geom from (
+    cur.execute("""update geo.river r set geom = g.geom from (
                      select river_id, ST_Multi(ST_SimplifyPreserveTopology(ST_LineMerge(ST_Collect(geom)), 0.0003)) geom
-                     from core.river_link where river_id is not null group by river_id) g where g.river_id = r.id""")
-    cur.execute("select count(*), count(parent_river_id), sum((geom is not null)::int) from core.river"); print("rivers (total, with parent, with geom):", cur.fetchone())
+                     from geo.river_link where river_id is not null group by river_id) g where g.river_id = r.id""")
+    cur.execute("select count(*), count(parent_river_id), sum((geom is not null)::int) from geo.river"); print("rivers (total, with parent, with geom):", cur.fetchone())
     conn.commit()
 print("done", round(time.time() - t0, 1), "s")

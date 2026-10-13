@@ -1,15 +1,15 @@
-"""Wye Alliance + Usk CaSTCo citizen-science readings from their public Epicollect5 projects -> core.site / sample / observation / survey.
+"""Wye Alliance + Usk CaSTCo citizen-science readings from their public Epicollect5 projects -> geo.site, live.series / live.observation, live.survey.
 Incremental: asks only for entries uploaded since the newest one we hold. First run backfills everything (~25 min at the polite rate).
 Units follow the project forms (developers.epicollect.net export API; form questions read from /api/internal/project/<slug>):
   nitrate, nitrite strips   Hach-type strips, mg/L as N                       -> nitrate_n, nitrite_n
-  Hanna phosphate checker   reported in ppm as PO4; converted to P (x0.3261), the unconverted number is kept in value_raw
+  Hanna phosphate checker   reported in ppm as PO4; converted to P (x0.3261), the unconverted number is kept in the survey answers
   ammonia (Hanna, strips)   mg/L as N                                          -> ammonia_total_n
 Not loaded as series (kept in the survey record): air temperature, strip pH, TDS, strip phosphate, water level (datums differ)."""
 import datetime as dt, json, os, re, statistics, sys
 os.environ.setdefault("MIN_GAP", "24")                      # the API allows 5 requests/minute; stay near half
 sys.path[:0] = [os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."), os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "load")]
 from zoneinfo import ZoneInfo
-import lib
+import common, lib
 from db import connect, copy_rows, source_id, start_run, finish_run
 
 API = "https://five.epicollect.net/api/export/entries/"
@@ -90,62 +90,56 @@ with connect() as conn, conn.cursor() as cur:
     tot = dict(entries=0, obs=0, new_sites=0, rejected=0)
     for project, cfg in PROJECTS.items():
         S = source_id(cur, cfg["source"]); run = start_run(cur, cfg["source"], "epicollect", {"project": cfg["slug"]})
-        cur.execute("select max(answers->>'uploaded_at') from core.survey where source_id = %s", (S,)); since = cur.fetchone()[0]
+        cur.execute("select max(answers->>'uploaded_at') from live.survey where source_id = %s", (S,)); since = cur.fetchone()[0]
         entries = fetch(cfg["slug"], since)
         parsed = [p for p in (parse(project, e) for e in entries) if p]
         # sites: coordinates learned from every entry that has them (volunteers only fill the location when at the site)
         coords = {}
         for p in parsed:
             if p["lat"] is not None: coords.setdefault(p["key"], []).append((p["lat"], p["lon"]))
-        cur.execute("select value, site_id from core.site_identifier where scheme = %s", (f"epicollect:{project}",)); SITE = dict(cur.fetchall())
+        cur.execute("select value, site_id from geo.site_key where scheme = %s", (f"epicollect:{project}",)); SITE = dict(cur.fetchall())
         names = {p["key"]: p for p in parsed}
         for key, p in names.items():
             code = key.split(":", 1)[1]
             if code in SITE or key not in coords: continue
             la = statistics.median(c[0] for c in coords[key]); lo = statistics.median(c[1] for c in coords[key])
-            cur.execute("""insert into core.site (kind, name, geom, geom_bng, country, status, primary_source_id, attrs)
-                           values ('survey_site', %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), ST_Transform(ST_SetSRID(ST_MakePoint(%s, %s), 4326), 27700), (select case b.name when 'England' then 'ENG' when 'Wales' then 'WLS' when 'Scotland' then 'SCT' end from core.boundary b where b.kind = 'country' and ST_Intersects(b.geom_lo, ST_SetSRID(ST_MakePoint(%s, %s), 4326)) limit 1), 'active', %s, %s) returning id""",
+            cur.execute("""insert into geo.site (kind, name, geom, geom_bng, country, status, primary_source_id, attrs)
+                           values ('survey_site', %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), ST_Transform(ST_SetSRID(ST_MakePoint(%s, %s), 4326), 27700), (select case b.name when 'England' then 'ENG' when 'Wales' then 'WLS' when 'Scotland' then 'SCT' end from geo.area b where b.kind = 'country' and ST_Intersects(b.geom_lo, ST_SetSRID(ST_MakePoint(%s, %s), 4326)) limit 1), 'active', %s, %s) returning id""",
                         (p["name"], lo, la, lo, la, lo, la, S, json.dumps({"code": code, "organisation": p["org"], "project": cfg["slug"]})))
             sid = cur.fetchone()[0]; SITE[code] = sid; tot["new_sites"] += 1
-            cur.execute("insert into core.site_identifier (scheme, value, site_id, source_id) values (%s, %s, %s, %s) on conflict do nothing", (f"epicollect:{project}", code, sid, S))
+            cur.execute("insert into geo.site_key (scheme, value, site_id) values (%s, %s, %s) on conflict do nothing", (f"epicollect:{project}", code, sid))
             cur.execute("""with n as (select l.id, l.river_id, l.waterbody_id, l.length_m, l.dist_to_mouth_m, ST_Distance(s.geom_bng, l.geom_bng) d, ST_LineLocatePoint(l.geom_bng, s.geom_bng) frac
-                                      from core.site s cross join lateral (select * from core.river_link order by geom_bng <-> s.geom_bng limit 1) l where s.id = %s)
-                           update core.site s set snap_distance_m = n.d, river_link_id = case when n.d <= 500 then n.id end, river_id = case when n.d <= 500 then n.river_id end,
-                                  waterbody_id = coalesce(case when n.d <= 500 then n.waterbody_id end, (select w.id from core.waterbody w where w.catchment_geom is not null and ST_Intersects(w.catchment_geom, s.geom) order by w.area_km2 limit 1)),
+                                      from geo.site s cross join lateral (select * from geo.river_link order by geom_bng <-> s.geom_bng limit 1) l where s.id = %s)
+                           update geo.site s set snap_distance_m = n.d, river_link_id = case when n.d <= 500 then n.id end, river_id = case when n.d <= 500 then n.river_id end,
+                                  waterbody_id = coalesce(case when n.d <= 500 then n.waterbody_id end, (select w.id from geo.waterbody w where w.catchment_geom is not null and ST_Intersects(w.catchment_geom, s.geom) order by w.area_km2 limit 1)),
                                   dist_to_mouth_m = case when n.d <= 500 then greatest(0, n.dist_to_mouth_m - n.frac * coalesce(n.length_m, 0)) end from n where s.id = %s""", (sid, sid))
         usable = [p for p in parsed if p["key"].split(":", 1)[1] in SITE]; tot["rejected"] += len(parsed) - len(usable)
         # surveys + samples
         for p in usable:
             sid = SITE[p["key"].split(":", 1)[1]]
-            cur.execute("insert into core.survey (source_id, source_key, kind, site_id, surveyed_at, answers, evidence_class) values (%s, %s, 'citizen_weekly', %s, %s, %s, 'citizen_science') on conflict do nothing",
-                        (S, p["uuid"], sid, p["at"], json.dumps(p["answers"])))
-            if not p["measures"]: continue
-            cur.execute("insert into core.sample (site_id, source_id, source_sample_key, sampled_at, material, purpose) values (%s, %s, %s, %s, 'river_water', 'citizen_science') on conflict do nothing returning id", (sid, S, p["uuid"], p["at"]))
-            r = cur.fetchone()
-            if r is None: cur.execute("select id from core.sample where source_id = %s and source_sample_key = %s", (S, p["uuid"])); r = cur.fetchone()
-            p["sample"] = r[0]; p["site"] = sid
+            cur.execute("""insert into live.survey (source_id, source_key, kind, site_id, waterbody_id, river_id, surveyed_at, answers, evidence_class)
+                           select %s, %s, 'citizen_weekly', s.id, s.waterbody_id, s.river_id, %s, %s, 'citizen_science' from geo.site s where s.id = %s on conflict do nothing""",
+                        (S, p["uuid"], p["at"], json.dumps(p["answers"]), sid))
+            if p["measures"]: p["site"] = sid
         # series + observations
-        cur.execute("select source_series_key, id from core.series where source_id = %s", (S,)); SER = dict(cur.fetchall())
+        cur.execute("select source_series_key, id from live.series where source_id = %s", (S,)); SER = dict(cur.fetchall())
         rows = []
         for p in usable:
-            if "sample" not in p: continue
+            if "site" not in p: continue
             for param, meth, v, raw in p["measures"]:
                 key = f"epi:{p['key']}:{param}:{meth}"
                 if key not in SER:
-                    cur.execute("""insert into core.series (site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, qualifier, matrix, method, evidence_class, is_preferred)
-                                   values (%s, %s, %s, %s, 'instant', null, %s, %s, 'river_water', %s, 'citizen_science', false) on conflict do nothing returning id""",
+                    cur.execute("""insert into live.series (site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, qualifier, matrix, method, evidence_class)
+                                   values (%s, %s, %s, %s, 'instant', null, %s, %s, 'river_water', %s, 'citizen_science') on conflict do nothing returning id""",
                                 (p["site"], PID[param], S, key, UNIT[PID[param]], meth, meth))
                     x = cur.fetchone()
-                    if x is None: cur.execute("select id from core.series where source_id = %s and source_series_key = %s", (S, key)); x = cur.fetchone()
+                    if x is None: cur.execute("select id from live.series where source_id = %s and source_series_key = %s", (S, key)); x = cur.fetchone()
                     SER[key] = x[0]
-                rows.append((SER[key], p["at"], v, str(raw), "unchecked", p["sample"]))
-        cur.execute("create temp table stg_e (series_id bigint, observed_at timestamptz, value float8, value_raw text, quality text, sample_id bigint) on commit drop")
-        copy_rows(cur, "stg_e", ["series_id", "observed_at", "value", "value_raw", "quality", "sample_id"], rows)
-        cur.execute("insert into core.observation (series_id, observed_at, value, value_raw, quality, sample_id) select * from stg_e on conflict do nothing")
-        cur.execute("""insert into core.observation_latest (series_id, observed_at, value, quality) select distinct on (series_id) series_id, observed_at, value, quality from stg_e order by series_id, observed_at desc
-                       on conflict (series_id) do update set observed_at = excluded.observed_at, value = excluded.value, quality = excluded.quality, updated_at = now() where excluded.observed_at > core.observation_latest.observed_at""")
-        cur.execute("""update core.series s set first_at = least(coalesce(s.first_at, x.a), x.a), last_at = greatest(coalesce(s.last_at, x.b), x.b) from (select series_id, min(observed_at) a, max(observed_at) b from stg_e group by 1) x where x.series_id = s.id""")
-        if rows: cur.execute("select ops.flag_implausible((select min(observed_at) from stg_e))")
+                rows.append((SER[key], p["at"], v, "unchecked", None))
+        cur.execute("create temp table stg_e (series_id bigint, observed_at timestamptz, value float8, quality text, censor text) on commit drop")
+        copy_rows(cur, "stg_e", ["series_id", "observed_at", "value", "quality", "censor"], rows)
+        common.merge_staged(cur, "stg_e", update=False)
+        if rows: cur.execute("select live.flag_implausible((select min(observed_at) from stg_e))")
         finish_run(cur, run, read=len(entries), written=len(rows), rejected=len(parsed) - len(usable)); conn.commit()
         tot["entries"] += len(entries); tot["obs"] += len(rows)
         print(f"{project}: {len(entries)} entries, {len(parsed)} real visits, {len(rows)} readings", flush=True)

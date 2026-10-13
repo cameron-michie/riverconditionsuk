@@ -26,7 +26,7 @@ with connect() as conn, conn.cursor() as cur:
     cur.execute("""insert into core.survey (source_id, source_key, kind, surveyed_at, geom, summary_label, summary_score, breach, answers)
         select src, key, kind, at::timestamptz, ST_SetSRID(ST_MakePoint(lon, lat), 4326), label, score, breach, answers::jsonb from stg_sv where lon between -11 and 3 and lat between 49 and 61.5 on conflict do nothing""")
     cur.execute("""update core.survey s set waterbody_id = w.id from (
-        select distinct on (s2.id) s2.id sid, w2.id from core.survey s2 join core.waterbody w2 on w2.catchment_geom is not null and ST_Intersects(w2.catchment_geom, s2.geom)
+        select distinct on (s2.id) s2.id sid, w2.id from core.survey s2 join geo.waterbody w2 on w2.catchment_geom is not null and ST_Intersects(w2.catchment_geom, s2.geom)
         where s2.waterbody_id is null order by s2.id, w2.area_km2) w where w.sid = s.id""")
     cur.execute("select count(*), count(waterbody_id) from core.survey"); print("surveys (total, in waterbody):", cur.fetchone(), round(time.time() - t0, 1), "s")
 
@@ -40,7 +40,7 @@ with connect() as conn, conn.cursor() as cur:
     copy_rows(cur, "stg_pi", ["key", "cat", "pol", "ws", "ls", "aus", "lon", "lat", "attrs"], rows)
     cur.execute("""insert into core.pollution_incident (source_id, source_key, category, pollutant, water_severity, land_severity, air_severity, geom, attrs)
         select %s, key, cat, pol, ws, ls, aus, ST_SetSRID(ST_MakePoint(lon, lat), 4326), attrs::jsonb from stg_pi on conflict do nothing""", (S("castco_pressures"),))
-    cur.execute("""update core.pollution_incident i set waterbody_id = w.id from (select distinct on (i2.id) i2.id iid, w2.id from core.pollution_incident i2 join core.waterbody w2 on w2.catchment_geom is not null and ST_Intersects(w2.catchment_geom, i2.geom) order by i2.id, w2.area_km2) w where w.iid = i.id""")
+    cur.execute("""update core.pollution_incident i set waterbody_id = w.id from (select distinct on (i2.id) i2.id iid, w2.id from core.pollution_incident i2 join geo.waterbody w2 on w2.catchment_geom is not null and ST_Intersects(w2.catchment_geom, i2.geom) order by i2.id, w2.area_km2) w where w.iid = i.id""")
     # ── obstacles
     cur.execute("create temp table stg_ob (key text, typ text, origin text, fp text, h numeric, lon double precision, lat double precision, attrs text) on commit drop")
     rows = []
@@ -49,11 +49,11 @@ with connect() as conn, conn.cursor() as cur:
         if g: rows.append((str(p["OBJECTID"]), p.get("obstacle_type"), p.get("origin"), p.get("fish_pass"), (p.get("height") if isinstance(p.get("height"), (int, float)) else None), g[0], g[1], jdump(clean(p, ("OBJECTID", "easting", "northing", "gridrefuk")))))
     copy_rows(cur, "stg_ob", ["key", "typ", "origin", "fp", "h", "lon", "lat", "attrs"], rows)
     cur.execute("insert into core.river_obstacle (source_id, source_key, obstacle_type, origin, fish_pass, height_m, geom, attrs) select %s, key, typ, origin, fp, h, ST_SetSRID(ST_MakePoint(lon, lat), 4326), attrs::jsonb from stg_ob on conflict do nothing", (S("castco_pressures"),))
-    cur.execute("""update core.river_obstacle o set waterbody_id = w.id from (select distinct on (o2.id) o2.id oid, w2.id from core.river_obstacle o2 join core.waterbody w2 on w2.catchment_geom is not null and ST_Intersects(w2.catchment_geom, o2.geom) order by o2.id, w2.area_km2) w where w.oid = o.id""")
+    cur.execute("""update core.river_obstacle o set waterbody_id = w.id from (select distinct on (o2.id) o2.id oid, w2.id from core.river_obstacle o2 join geo.waterbody w2 on w2.catchment_geom is not null and ST_Intersects(w2.catchment_geom, o2.geom) order by o2.id, w2.area_km2) w where w.oid = o.id""")
     cur.execute("select (select count(*) from core.pollution_incident), (select count(*) from core.river_obstacle)"); print("incidents, obstacles:", cur.fetchone())
 
     # ── bathing samples -> series/observations
-    cur.execute("select value, site_id from core.site_identifier where scheme='eubwid'"); EU = dict(cur.fetchall())
+    cur.execute("select value, site_id from geo.site_key where scheme='eubwid'"); EU = dict(cur.fetchall())
     cur.execute("select code, id from ref.parameter where code in ('ecoli','enterococci')"); P = dict(cur.fetchall())
     samples = json.load(open(os.path.join(RAW, "bathing", "in_season_samples_2023_on.json")))
     v = lambda x: x.get("_value") if isinstance(x, dict) else x
@@ -72,15 +72,15 @@ with connect() as conn, conn.cursor() as cur:
             if x.get(cv) is None: continue
             k = f"bwq:{eu}:{par}"; ser.setdefault(k, (sid, P[par]))
             obs.append((k, at, float(x[cv]) if not cens(x.get(cq)) else None, cens(x.get(cq)), float(x[cv]) if cens(x.get(cq)) else None, "true" == str(v(x.get("discountable"))).lower()))
-    cur.execute("select nextval(pg_get_serial_sequence('core.series','id')) from generate_series(1,%s)", (max(len(ser), 1),)); ids = [r[0] for r in cur.fetchall()]
+    cur.execute("select nextval(pg_get_serial_sequence('live.series','id')) from generate_series(1,%s)", (max(len(ser), 1),)); ids = [r[0] for r in cur.fetchall()]
     cur.execute("create temp table stg_bs (id bigint, site_id bigint, param bigint, key text) on commit drop")
     copy_rows(cur, "stg_bs", ["id", "site_id", "param", "key"], ((i, s, p, k) for i, (k, (s, p)) in zip(ids, ser.items())))
-    cur.execute("""insert into core.series (id, site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, native_unit, evidence_class, matrix, method)
+    cur.execute("""insert into live.series (id, site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, native_unit, evidence_class, matrix, method)
         overriding system value select id, site_id, param, %s, key, 'instant', null, 'per_100ml', 'count/100ml', 'regulator_assessment', 'bathing_water', 'laboratory' from stg_bs on conflict (source_id, source_series_key) do nothing""", (S("ea_bathing"),))
-    cur.execute("select source_series_key, id from core.series where source_id=%s", (S("ea_bathing"),)); SM = dict(cur.fetchall())
+    cur.execute("select source_series_key, id from live.series where source_id=%s", (S("ea_bathing"),)); SM = dict(cur.fetchall())
     cur.execute("create temp table stg_bo (sid bigint, at text, val double precision, cen text, dl double precision, disc boolean) on commit drop")
     copy_rows(cur, "stg_bo", ["sid", "at", "val", "cen", "dl", "disc"], ((SM[k], a, vv, c, d, dd) for k, a, vv, c, d, dd in obs))
-    cur.execute("""insert into core.observation (series_id, observed_at, value, censor, detection_limit, quality)
+    cur.execute("""insert into live.observation (series_id, observed_at, value, censor, detection_limit, quality)
         select sid, (at::timestamp at time zone 'Europe/London'), val, cen, dl, case when disc then 'suspect' else 'good' end from stg_bo on conflict do nothing""")
     print("bathing series", len(SM), "obs", len(obs), round(time.time() - t0, 1), "s")
 
@@ -147,7 +147,7 @@ with connect() as conn, conn.cursor() as cur:
             b = f.split("__")[0]
             return "castco_wfd_c4" if b.startswith("wfd_c4") or b.startswith("wfd_c3") else "castco_separate" if b.startswith("sources_") else "castco_big_river_watch" if b == "big_river_watch" else "castco_riverfly" if b.startswith("riverfly") else "castco_pressures"
         return SRCMAP.get(d)
-    cur.execute("select slug, id from ingest.source"); SID = dict(cur.fetchall())
+    cur.execute("select slug, id from ref.source"); SID = dict(cur.fetchall())
     cur.execute("create temp table stg_ro (src bigint, path text, url text, sha text, bytes bigint, at timestamptz, note text) on commit drop")
     seen, rows = set(), []
     for line in open(os.path.join(RAW, "manifest.jsonl")):

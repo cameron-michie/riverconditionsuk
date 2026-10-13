@@ -7,10 +7,10 @@ AMBIG = {"avon","stour","derwent","dee","don","eden","frome","trent","ouse","tes
 with connect() as conn, conn.cursor() as cur:
     cur.execute("""select distinct on (lower(regexp_replace(name, '^(River|Afon) ', '')))
                           id, name, regexp_replace(name, '^(River|Afon) ', '') short, length_km
-                   from core.river where length_km >= 40 and name ~ '^(River|Afon) ' order by lower(regexp_replace(name, '^(River|Afon) ', '')), length_km desc""")
+                   from geo.river where length_km >= 40 and name ~ '^(River|Afon) ' order by lower(regexp_replace(name, '^(River|Afon) ', '')), length_km desc""")
     rivers = cur.fetchall()
     # a name is "distinctive" if it is not a notorious duplicate and there is only one river of that name >= 40km
-    cur.execute("select lower(regexp_replace(name,'^(River|Afon) ','')) k, count(*) from core.river where length_km >= 40 and name ~ '^(River|Afon) ' group by 1")
+    cur.execute("select lower(regexp_replace(name,'^(River|Afon) ','')) k, count(*) from geo.river where length_km >= 40 and name ~ '^(River|Afon) ' group by 1")
     dup = {k for k, n in cur.fetchall() if n > 2}
     pats = []
     for rid, name, short, km in rivers:

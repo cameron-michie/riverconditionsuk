@@ -12,3 +12,5 @@ supabase_creds.md
 web/wx/
 data/
 supabase/compute/rivers-etl/app/
+/data
+/.venv

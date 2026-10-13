@@ -19,7 +19,7 @@ with connect() as conn, conn.cursor() as cur:
     # snap to the network
     cur.execute("""with k as (
         select p.id pid, p.kind, n.river_id, n.waterbody_id, ST_Distance(p.geom_bng, n.geom_bng) d
-        from core.poi p cross join lateral (select river_id, waterbody_id, geom_bng from core.river_link where size_class >= case when p.kind = 'bridge' then 2 else 0 end order by geom_bng <-> p.geom_bng limit 1) n
+        from core.poi p cross join lateral (select river_id, waterbody_id, geom_bng from geo.river_link where size_class >= case when p.kind = 'bridge' then 2 else 0 end order by geom_bng <-> p.geom_bng limit 1) n
         where p.source_id = %s and p.kind in ('bridge', 'reservoir'))
         update core.poi p set river_id = case when k.d <= case k.kind when 'bridge' then 40 else 600 end then k.river_id end,
                               waterbody_id = case when k.d <= case k.kind when 'bridge' then 40 else 600 end then k.waterbody_id end, snap_distance_m = k.d
@@ -59,8 +59,8 @@ with connect() as conn, conn.cursor() as cur:
           select s.*, ST_Multi(ST_CollectionExtract(ST_MakeValid(ST_SetSRID(ST_GeomFromGeoJSON(g), 4326)), 3)) geom from stg_b s) q
         where not ST_IsEmpty(geom) on conflict do nothing""", (src,))
     cur.execute("""update core.beach_area b set bathing_site_id = x.sid from (
-        select b2.id bid, (select s.id from core.site s where s.kind = 'bathing_water' and s.geom_bng is not null order by s.geom_bng <-> ST_Transform(b2.label_pt, 27700) limit 1) sid from core.beach_area b2) x
-        where x.bid = b.id and ST_Distance(ST_Transform(b.label_pt, 27700), (select geom_bng from core.site where id = x.sid)) <= 800""")
+        select b2.id bid, (select s.id from geo.site s where s.kind = 'bathing_water' and s.geom_bng is not null order by s.geom_bng <-> ST_Transform(b2.label_pt, 27700) limit 1) sid from core.beach_area b2) x
+        where x.bid = b.id and ST_Distance(ST_Transform(b.label_pt, 27700), (select geom_bng from geo.site where id = x.sid)) <= 800""")
     cur.execute("analyze core.beach_area"); cur.execute("select count(*), count(name), count(bathing_site_id), round(sum(area_km2)::numeric, 1) from core.beach_area"); print("beach areas (n, named, bathing-linked, km2):", cur.fetchone())
     conn.commit()
 
@@ -86,7 +86,7 @@ with connect() as conn, conn.cursor() as cur:
     cur.execute("""create temp table cand2 on commit drop as
         select c.*, greatest(
            (select ST_Length(ST_Difference(c.g, land.g)) from land) / nullif(ST_Length(c.g), 0),
-           coalesce((select ST_Length(ST_Intersection(c.g, ST_Buffer(ST_Collect(l.geom_bng), 60))) from core.river_link l where l.size_class >= 7 and l.geom_bng && ST_Expand(c.g, 80) and ST_DWithin(l.geom_bng, c.g, 60)), 0) / nullif(ST_Length(c.g), 0),
+           coalesce((select ST_Length(ST_Intersection(c.g, ST_Buffer(ST_Collect(l.geom_bng), 60))) from geo.river_link l where l.size_class >= 7 and l.geom_bng && ST_Expand(c.g, 80) and ST_DWithin(l.geom_bng, c.g, 60)), 0) / nullif(ST_Length(c.g), 0),
            coalesce((select ST_Length(ST_Intersection(c.g, ST_Buffer(ST_Collect(ST_Transform(w.geom, 27700)), 20))) from core.water_area w where w.area_km2 >= 1 and w.geom && ST_Transform(ST_Expand(c.g, 80), 4326) and ST_DWithin(ST_Transform(w.geom, 27700), c.g, 20)), 0) / nullif(ST_Length(c.g), 0)
         ) as over_water from cand c""")
     cur.execute("create temp table grp on commit drop as select *, ST_ClusterDBSCAN(g, 400, 1) over (partition by name) cl from cand2 where over_water >= 0.2")

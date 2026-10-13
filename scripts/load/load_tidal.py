@@ -8,13 +8,13 @@ with connect() as conn, conn.cursor() as cur:
     feats = json.load(open(os.path.join(RAW, "wfd", "trac_cycle2.json")))["features"]
     cur.execute("create temp table stg_t (code text, name text, category text, rbd text, poly text) on commit drop")
     copy_rows(cur, "stg_t", ["code", "name", "category", "rbd", "poly"], ((f["properties"]["wb_id"], f["properties"]["wb_name"].title() if f["properties"]["wb_name"].isupper() else f["properties"]["wb_name"], f["properties"]["wb_cat"].lower(), str(f["properties"]["rbd_id"]), json.dumps(f["geometry"])) for f in feats))
-    cur.execute("""insert into core.waterbody (wb_code, name, category, country, rbd_id, catchment_geom, area_km2, source_id)
+    cur.execute("""insert into geo.waterbody (wb_code, name, category, country, rbd_id, catchment_geom, area_km2, source_id)
         select s.code, s.name, s.category, 'ENG', r.id, g.geom, ST_Area(ST_Transform(g.geom, 27700)) / 1e6, %s
         from stg_t s left join core.catchment r on r.kind = 'rbd' and r.code = s.rbd
         cross join lateral (select ST_Multi(ST_CollectionExtract(ST_MakeValid(ST_SetSRID(ST_GeomFromGeoJSON(s.poly), 4326)), 3)) geom) g
         on conflict (wb_code) do nothing""", (src,))
-    cur.execute("insert into core.waterbody_identifier (scheme, value, waterbody_id, source_id) select 'wfd_id', wb_code, id, %s from core.waterbody where category in ('transitional', 'coastal') on conflict do nothing", (src,))
-    cur.execute("select wb_code, id from core.waterbody where category in ('transitional', 'coastal')"); WB = dict(cur.fetchall()); print("tidal waterbodies", len(WB))
+    cur.execute("insert into core.waterbody_identifier (scheme, value, waterbody_id, source_id) select 'wfd_id', wb_code, id, %s from geo.waterbody where category in ('transitional', 'coastal') on conflict do nothing", (src,))
+    cur.execute("select wb_code, id from geo.waterbody where category in ('transitional', 'coastal')"); WB = dict(cur.fetchall()); print("tidal waterbodies", len(WB))
     cur.execute("select code, native_names from ref.classification_element"); EL = {}
     for code, names in cur.fetchall():
         for nm in names: EL[nm.lower()] = code
@@ -38,9 +38,9 @@ with connect() as conn, conn.cursor() as cur:
         select distinct on (wid, cycle, year, el, src) wid, cycle, year, el, status, rank, native, cert, src from stg_c on conflict do nothing""")
     print("classification rows", len(rows))
     # tidal links: any link whose midpoint lies in an estuary or coastal polygon belongs to that water body
-    cur.execute("""update core.river_link l set waterbody_id = t.wid from (
-        select distinct on (l2.id) l2.id lid, w.id wid from core.river_link l2
-        join core.waterbody w on w.category in ('transitional', 'coastal') and ST_Intersects(w.catchment_geom, ST_LineInterpolatePoint(l2.geom, 0.5))
+    cur.execute("""update geo.river_link l set waterbody_id = t.wid from (
+        select distinct on (l2.id) l2.id lid, w.id wid from geo.river_link l2
+        join geo.waterbody w on w.category in ('transitional', 'coastal') and ST_Intersects(w.catchment_geom, ST_LineInterpolatePoint(l2.geom, 0.5))
         order by l2.id, w.area_km2) t where t.lid = l.id""")
-    cur.execute("select count(*) from core.river_link l join core.waterbody w on w.id = l.waterbody_id where w.category in ('transitional', 'coastal')"); print("tidal links", cur.fetchone()[0])
+    cur.execute("select count(*) from geo.river_link l join geo.waterbody w on w.id = l.waterbody_id where w.category in ('transitional', 'coastal')"); print("tidal links", cur.fetchone()[0])
     conn.commit()

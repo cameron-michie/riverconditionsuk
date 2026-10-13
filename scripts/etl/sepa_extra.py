@@ -13,9 +13,9 @@ JOBS = [  # (parametertype_name, ts_name, ref.parameter code, aggregation, inter
 q = lambda **kw: KI + "&" + urllib.parse.urlencode(kw)
 with connect() as conn, conn.cursor() as cur:
     S = source_id(cur, "sepa_kiwis"); run = start_run(cur, "sepa_kiwis", "sepa_extra")
-    cur.execute("select value, site_id from core.site_identifier where scheme = 'sepa:station_no'"); SITE = dict(cur.fetchall())
+    cur.execute("select value, site_id from geo.site_key where scheme = 'sepa:station_no'"); SITE = dict(cur.fetchall())
     cur.execute("select code, id from ref.parameter"); PID = dict(cur.fetchall())
-    cur.execute("select source_series_key, id from core.series where source_id = %s", (S,)); SER = dict(cur.fetchall())
+    cur.execute("select source_series_key, id from live.series where source_id = %s", (S,)); SER = dict(cur.fetchall())
     seen = written = made = 0
     for ptype, tsname, code, agg, interval, unit, qual in JOBS:
         lst = lib.getj(q(request="getTimeseriesList", parametertype_name=ptype, ts_name=tsname, returnfields="ts_id,station_no", rows=3000), timeout=120)[1:]
@@ -24,7 +24,7 @@ with connect() as conn, conn.cursor() as cur:
             site = SITE.get(no)
             if site is None: continue
             if ts not in SER:
-                cur.execute("""insert into core.series (site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, qualifier, evidence_class)
+                cur.execute("""insert into live.series (site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, qualifier, evidence_class)
                                values (%s, %s, %s, %s, %s, %s, %s, %s, 'official_monitoring') on conflict do nothing returning id""", (site, PID[code], S, ts, agg, interval, unit, qual))
                 x = cur.fetchone()
                 if x is None: continue

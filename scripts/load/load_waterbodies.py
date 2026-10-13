@@ -55,7 +55,7 @@ with connect() as conn, conn.cursor() as cur:
                    str(p.get("rbd_id")), str(p.get("mancat_id")), str(p.get("opcat_id")),
                    json.dumps(d["line"]) if d.get("line") else None, json.dumps(d["poly"]) if d.get("poly") else None, jdump(attrs))
     copy_rows(cur, "stg_wb", ["code", "name", "category", "designation", "country", "rbd", "man", "opc", "line", "poly", "attrs"], wbrows())
-    cur.execute("""insert into core.waterbody (wb_code, name, category, designation, country, rbd_id, mancat_id, opcat_id, line_geom, catchment_geom, area_km2, length_km, source_id, attrs)
+    cur.execute("""insert into geo.waterbody (wb_code, name, category, designation, country, rbd_id, mancat_id, opcat_id, line_geom, catchment_geom, area_km2, length_km, source_id, attrs)
         select s.code, s.name, s.category, s.designation, s.country,
                r.id, m.id, o.id,
                case when s.line is not null then ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(s.line), 4326)) end,
@@ -68,14 +68,14 @@ with connect() as conn, conn.cursor() as cur:
         left join core.catchment m on m.kind='management' and m.code = s.man
         left join core.catchment o on o.kind='operational' and o.code = s.opc
         on conflict (wb_code) do nothing""", (src_c4,))
-    cur.execute("select wb_code, id from core.waterbody"); WB = dict(cur.fetchall()); print("waterbodies", len(WB), round(time.time() - t0, 1), "s")
+    cur.execute("select wb_code, id from geo.waterbody"); WB = dict(cur.fetchall()); print("waterbodies", len(WB), round(time.time() - t0, 1), "s")
     # dissolve polygons up the hierarchy
     for kind, col in (("operational", "opcat_id"), ("management", "mancat_id"), ("rbd", "rbd_id")):
         cur.execute(f"""update core.catchment c set geom = g.geom, area_km2 = ST_Area(ST_Transform(g.geom, 27700)) / 1e6 from (
               select {col} cid, ST_Multi(ST_CollectionExtract(ST_MakeValid(ST_UnaryUnion(ST_Collect(ST_MakeValid(ST_SnapToGrid(catchment_geom, 0.00001))))), 3)) geom
-              from core.waterbody where catchment_geom is not null and {col} is not null group by {col}) g where g.cid = c.id and c.kind = %s""", (kind,))
+              from geo.waterbody where catchment_geom is not null and {col} is not null group by {col}) g where g.cid = c.id and c.kind = %s""", (kind,))
     # identifiers: also accept un-prefixed forms
-    cur.execute("insert into core.waterbody_identifier (scheme, value, waterbody_id, source_id) select 'wfd_id', wb_code, id, %s from core.waterbody on conflict do nothing", (src_c4,))
+    cur.execute("insert into core.waterbody_identifier (scheme, value, waterbody_id, source_id) select 'wfd_id', wb_code, id, %s from geo.waterbody on conflict do nothing", (src_c4,))
 
     # ── classification, cycle 4 (2025) from layer columns
     cur.execute("create temp table stg_cl (wb_code text, cycle smallint, year smallint, element text, status_native text, certainty text, src bigint) on commit drop")
@@ -117,7 +117,7 @@ with connect() as conn, conn.cursor() as cur:
     copy_rows(cur, "stg_vm", ["native", "canonical", "rank"], [(k, v[0], v[1]) for k, v in VM.items()])
     cur.execute("""insert into core.waterbody_classification (waterbody_id, cycle, year, element_code, status, status_rank, status_native, certainty, source_id)
         select distinct on (w.id, s.cycle, s.year, s.element, s.src) w.id, s.cycle, s.year, s.element, coalesce(v.canonical, 'not_assessed'), v.rank, s.status_native, s.certainty, s.src
-        from stg_cl s join core.waterbody w on w.wb_code = s.wb_code left join stg_vm v on v.native = lower(s.status_native)
+        from stg_cl s join geo.waterbody w on w.wb_code = s.wb_code left join stg_vm v on v.native = lower(s.status_native)
         on conflict do nothing""")
     cur.execute("select count(*) from core.waterbody_classification"); print("classification rows", cur.fetchone()[0], round(time.time() - t0, 1), "s")
 
@@ -138,7 +138,7 @@ with connect() as conn, conn.cursor() as cur:
     copy_rows(cur, "stg_rn", ["wb_code", "cycle", "element", "reason_type", "sector", "sector_native", "activity", "pressure", "certainty", "skey"], rows)
     cur.execute("""insert into core.waterbody_reason (waterbody_id, cycle, element_code, reason_type, sector_code, sector_native, activity, pressure_type, certainty, source_id, source_key)
         select w.id, s.cycle, e.code, s.reason_type, s.sector, s.sector_native, s.activity, s.pressure, s.certainty, %s, s.skey
-        from stg_rn s join core.waterbody w on w.wb_code = s.wb_code left join ref.classification_element e on e.code = s.element on conflict do nothing""", (src_rn,))
+        from stg_rn s join geo.waterbody w on w.wb_code = s.wb_code left join ref.classification_element e on e.code = s.element on conflict do nothing""", (src_rn,))
     cur.execute("select count(*) from core.waterbody_reason"); print("reasons", cur.fetchone()[0])
 
     # ── SEPARATE apportionment (modelled)
@@ -156,7 +156,7 @@ with connect() as conn, conn.cursor() as cur:
     copy_rows(cur, "stg_ap", ["wb_code", "pollutant", "sector", "load", "share"], rows)
     cur.execute("""insert into core.waterbody_apportionment (waterbody_id, pollutant, sector, load_t_yr, share_pct, model, model_version, source_id)
         select distinct on (w.id, s.pollutant, s.sector) w.id, s.pollutant, s.sector, s.load, least(100, greatest(0, s.share)), 'SEPARATE', 'CaSTCo-2021', %s
-        from stg_ap s join core.waterbody w on w.wb_code = s.wb_code on conflict do nothing""", (src_sep,))
+        from stg_ap s join geo.waterbody w on w.wb_code = s.wb_code on conflict do nothing""", (src_sep,))
     cur.execute("select count(*) from core.waterbody_apportionment"); print("apportionment", cur.fetchone()[0])
     finish_run(cur, run, written=len(WB)); conn.commit()
 print("done", round(time.time() - t0, 1), "s")

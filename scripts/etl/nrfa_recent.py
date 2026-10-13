@@ -1,5 +1,5 @@
 """NRFA quality-controlled daily mean flow (gdf), values newer than what we hold. NRFA publishes about 30 days behind, so these rows are archive-age on arrival:
-they go straight to the Parquet archive (and ledger), not through Postgres. The weekly flow_normal rebuild reads them from there."""
+they go straight to the Parquet archive (and ledger), not through Postgres. Runs quarterly in the `normals` job, just before flow_normal_refresh.py reads them."""
 import concurrent.futures as cf, datetime as dt, glob, hashlib, os, sys
 import common, lib
 import pyarrow as pa, pyarrow.dataset as ds, pyarrow.parquet as pq
@@ -12,8 +12,8 @@ SCHEMA = pa.schema([("series_id", pa.int64()), ("observed_at", pa.timestamp("us"
                     ("value_raw", pa.string()), ("quality", pa.string()), ("completeness", pa.float32()), ("sample_id", pa.int64())])
 with connect() as conn, conn.cursor() as cur:
     S = source_id(cur, "nrfa"); run = start_run(cur, "nrfa", "nrfa_recent")
-    cur.execute("select s.source_series_key, s.id from core.series s where s.source_id = %s and s.qualifier = 'gdf'", (S,)); SER = {k.split(":")[1]: i for k, i in cur.fetchall()}     # nrfa:<id>:gdf
-    cur.execute("select series_id, max(observed_at) from core.observation where series_id = any(%s) group by 1", (list(SER.values()),)); last = dict(cur.fetchall())
+    cur.execute("select s.source_series_key, s.id from live.series s where s.source_id = %s and s.qualifier = 'gdf'", (S,)); SER = {k.split(":")[1]: i for k, i in cur.fetchall()}     # nrfa:<id>:gdf
+    cur.execute("select series_id, max(observed_at) from live.observation where series_id = any(%s) group by 1", (list(SER.values()),)); last = dict(cur.fetchall())
     store.fetch_archive(cur, "observation:daily"); d_dir = os.path.join(ARCH, "observation", "daily")
     if glob.glob(os.path.join(d_dir, "**", "*.parquet"), recursive=True):
         t = ds.dataset(d_dir, format="parquet", partitioning="hive").to_table(columns=["series_id", "observed_at"], filter=ds.field("series_id").isin(list(SER.values()))).to_pandas()

@@ -30,10 +30,10 @@ with connect() as conn, conn.cursor() as cur:
         cur.execute("select count(*) from ops.archive_object where path like '%nrw_hist_%'")
         if cur.fetchone()[0]: sys.exit("history already archived; use --days N to fill a recent gap")
     stations = lib.get(B + "StationData", headers=H).json()
-    cur.execute("select s.id, s.kind, ST_X(s.geom), ST_Y(s.geom) from core.site s join core.site_identifier i on i.site_id = s.id and i.scheme = 'nrw:station'"); TEL = cur.fetchall()
-    cur.execute("select value, site_id from core.site_identifier where scheme = 'nrw:rs'"); RS = dict(cur.fetchall())
+    cur.execute("select s.id, s.kind, ST_X(s.geom), ST_Y(s.geom) from geo.site s join geo.site_key i on i.site_id = s.id and i.scheme = 'nrw:station'"); TEL = cur.fetchall()
+    cur.execute("select value, site_id from geo.site_key where scheme = 'nrw:rs'"); RS = dict(cur.fetchall())
     cur.execute("select code, id from ref.parameter"); PID = dict(cur.fetchall())
-    cur.execute("select se.site_id, se.parameter_id, se.id from core.series se where se.source_id = %s and se.interval_s = 900", (S,)); SERIES = {(a, b): c for a, b, c in cur.fetchall()}
+    cur.execute("select se.site_id, se.parameter_id, se.id from live.series se where se.source_id = %s and se.interval_s = 900", (S,)); SERIES = {(a, b): c for a, b, c in cur.fetchall()}
     taken, jobs = set(RS.values()), []
     for st in stations:
         loc = str(st["location"]); pos = (st["longitude"], st["latitude"])
@@ -44,23 +44,23 @@ with connect() as conn, conn.cursor() as cur:
                 c = sorted((dist((x, y), pos), sid) for sid, k, x, y in TEL if k == kind and sid not in taken)
                 if c and c[0][0] <= 400: sid = c[0][1]
                 else:
-                    cur.execute("""insert into core.site (kind, name, geom, geom_bng, country, status, primary_source_id, attrs) values (%s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326),
+                    cur.execute("""insert into geo.site (kind, name, geom, geom_bng, country, status, primary_source_id, attrs) values (%s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326),
                                    ST_Transform(ST_SetSRID(ST_MakePoint(%s, %s), 4326), 27700), 'WLS', 'active', %s, %s) returning id""", (kind, st["titleEn"] or st["nameEN"], *pos, *pos, S, json.dumps({"nrw_rs": loc})))
                     sid = cur.fetchone()[0]
-                cur.execute("insert into core.site_identifier (scheme, value, site_id, source_id, match_method) values ('nrw:rs', %s, %s, %s, 'spatial') on conflict do nothing", (loc, sid, S))
+                cur.execute("insert into geo.site_key (scheme, value, site_id) values ('nrw:rs', %s, %s) on conflict do nothing", (loc, sid))
                 RS[loc] = sid; taken.add(sid)
             site = RS[loc]; key = (site, PID[code])
             if key not in SERIES:
-                cur.execute("""insert into core.series (site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, native_unit, qualifier, datum, evidence_class)
+                cur.execute("""insert into live.series (site_id, parameter_id, source_id, source_series_key, aggregation, interval_s, unit_id, native_unit, qualifier, datum, evidence_class)
                                values (%s, %s, %s, %s, %s, 900, 'm', %s, %s, %s, 'official_monitoring') on conflict do nothing returning id""",
                             (site, PID[code], S, f"nrw_rs:{loc}:{p['parameter']}", agg, p["units"], "stage" if code == "water_level" else "15min_total", p["units"] if p["units"] == "mAOD" else None))
                 x = cur.fetchone()
                 if x is None: continue
-                if code == "rainfall": cur.execute("update core.series set unit_id = 'mm' where id = %s", (x[0],))
+                if code == "rainfall": cur.execute("update live.series set unit_id = 'mm' where id = %s", (x[0],))
                 SERIES[key] = x[0]
             jobs.append((loc, p["parameter"], SERIES[key]))
     if GAPS:
-        cur.execute("select series_id, observed_at from core.observation_latest where series_id = any(%s)", ([j[2] for j in jobs],)); newest = dict(cur.fetchall())
+        cur.execute("select id, latest_at from live.series where latest_at is not null and id = any(%s)", ([j[2] for j in jobs],)); newest = dict(cur.fetchall())
         jobs = [j for j in jobs if j[2] not in newest or newest[j[2]] < now - dt.timedelta(hours=3)]
     conn.commit(); print(len(stations), "stations,", len(jobs), "series to fetch", flush=True)
 
@@ -97,6 +97,6 @@ with connect() as conn, conn.cursor() as cur:
                         (dt.datetime(y, m, 1, tzinfo=dt.timezone.utc), (dt.datetime(y, m, 28, tzinfo=dt.timezone.utc) + dt.timedelta(days=5)).replace(day=1), rel, n, os.path.getsize(path), hashlib.sha256(open(path, "rb").read()).hexdigest()))
             files += 1
         print(f"archived {len(old):,} older readings in {files} files")
-    cur.execute("select ops.flag_implausible(now() - interval '9 days')")
+    cur.execute("select live.flag_implausible(now() - interval '9 days')")
     finish_run(cur, run, read=len(hot) + len(old), written=b + len(old), rejected=bad); conn.commit()
     print(f"done: {len(jobs)} series, {bad} failed")
