@@ -137,12 +137,12 @@ set search_path = ''
 as $$
 declare j record;
 begin
-  for j in select name, interval_minutes from ops.etl_job where enabled loop
+  for j in select name, interval_minutes from ops.etl_job where enabled and name <> 'eo_worker' loop    -- the satellite worker schedules itself
     perform cron.schedule('etl:' || j.name, ops.cron_expr(j.name, j.interval_minutes), format('select ops.dispatch_job(%L)', j.name));
   end loop;
   perform cron.schedule('etl:_check', '*/2 * * * *', 'select ops.check_dispatches()');
   perform cron.schedule('etl:_housekeep', '5 1 * * *', 'select ops.housekeep()');
   perform cron.unschedule(c.jobname) from cron.job c where c.jobname like 'etl:%' and c.jobname not in ('etl:_check', 'etl:_housekeep')
-    and substring(c.jobname from 5) not in (select name from ops.etl_job where enabled);
+    and substring(c.jobname from 5) not in (select name from ops.etl_job where enabled and name <> 'eo_worker');
   return query select c.jobname::text, c.schedule::text from cron.job c where c.jobname like 'etl:%' order by 1;
 end $$;
