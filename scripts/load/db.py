@@ -4,7 +4,10 @@ DSN = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@127.0.0.1:5
 RAW = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "raw")
 
 def connect():
-    return psycopg.connect(DSN, autocommit=False)
+    c = psycopg.connect(DSN, autocommit=False)
+    # a job killed mid-transaction (a container redeploy) leaves its server-side session open holding row locks, which then blocks every later run: let Postgres end it
+    c.execute("set idle_in_transaction_session_timeout = '10min'"); c.commit()
+    return c
 
 def source_id(cur, slug):
     cur.execute("select id from ref.source where slug=%s", (slug,))
