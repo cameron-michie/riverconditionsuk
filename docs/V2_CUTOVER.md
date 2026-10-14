@@ -1,6 +1,17 @@
 # Cutting the hosted project (`cam-rivers`) over to the v2 schema and the Compute ETL
 
-Rehearsed end to end on a scratch copy of the hosted database (see PR 3). Not yet run on `cam-rivers`: it modifies a database the satellite-monitoring worker also uses, so it needs an explicit go-ahead.
+Rehearsed end to end on a scratch copy of the hosted database (see PR 3), then **executed on `cam-rivers` on 2026-10-14** after an explicit go-ahead (it modifies a database the satellite-monitoring worker also uses).
+
+## What was done on 2026-10-14
+1. Backup `data/cam_rivers_pre_v2.dump` (465 MB), then `v2_upgrade.sh`: 2.5 minutes, 0 errors. Counts carried over (geo.site 72,008; live.series 120,713; live.survey 76,759; geo.river_link 193,040). The REST `api` layer answers from the new schema.
+2. Registry: all jobs present. `eo_worker` was enabled on the hosted project, so `ops.sync_cron()` now skips it (the satellite worker schedules itself).
+3. Compute redeployed from PR 3 (image 9.0, later 10.0 with the gap-fill fix).
+4. Archive job moved 1,566,205 readings outside the 7-day window into Storage (60 files, ledger 2,044 rows).
+5. Smoke tests through pg_cron-style dispatch, all ok: live (1m36s), nrw_telemetry, wx_radar (57 s), wx_ifs (3.5 min), flow_forecast, epicollect, dcww_overflows, sepa_extra, bathing_recent, ea_hydrology_daily, nrw_flood, flood_zones (32 s with 2 risk areas), archive (2m47s).
+6. `select ops.sync_cron();` created 18 cron entries; `pg_cron` runs were confirmed unattended.
+7. Laptop LaunchAgent stopped.
+
+A dispatch made while the container is restarting returns 502/503; `ops.check_dispatches()` records it as failed and the next tick retries. Avoid redeploying in the middle of a long job (the container is replaced).
 
 ## State before
 - cam-rivers holds the old layout (ingest / ref / core / research / ops / wx / api) restored from the local database, plus the satellite tables in `core`. `pg_cron` has no jobs. The satellite worker last ran 2026-10-14 00:47 UTC.
@@ -21,6 +32,7 @@ Rehearsed end to end on a scratch copy of the hosted database (see PR 3). Not ye
 Before step 6: restore `data/cam_rivers_pre_v2.dump` into the project (drop the new schemas first). After step 6: `select cron.unschedule(jobname) from cron.job where jobname like 'etl:%';` stops everything at once.
 
 ## Known open items
-- `flood_zones` took over 13 minutes on the compute with many active warnings (it is now clipped in Python, but the EA tile fetches through the proxy are slow); it has a 25-minute timeout and its own job.
-- `nrw_gapfill` failed after 16 minutes against NRW's rate limit; the daily job paces at one call per 7 s and needs a retry on 429.
-- `ea_wq_recent` (EA water-quality POST) has not been run from the compute; it may need the proxy.
+- `flood_zones` took over 13 minutes on the compute when 7 warnings were active (EA tile fetches through the proxy are slow); with 2 active it takes 30 s. It has a 25-minute timeout and its own job.
+- `nrw_gapfill` previously failed because it held a database connection through ~400 rate-limited calls; fixed (fetch with no connection held), verified on the scratch copy.
+- `normals` (quarterly: NRFA top-up then seasonal normals from the archive) is slow on first run; watch `ops.job_freshness`.
+- `ea_wq_recent` ran ok on the compute.
