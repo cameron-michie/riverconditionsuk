@@ -62,7 +62,7 @@ with connect() as conn, conn.cursor() as cur:
     if GAPS:
         cur.execute("select id, latest_at from live.series where latest_at is not null and id = any(%s)", ([j[2] for j in jobs],)); newest = dict(cur.fetchall())
         jobs = [j for j in jobs if j[2] not in newest or newest[j[2]] < now - dt.timedelta(hours=3)]
-    conn.commit(); print(len(stations), "stations,", len(jobs), "series to fetch", flush=True)
+    conn.commit(); conn.close(); print(len(stations), "stations,", len(jobs), "series to fetch", flush=True)      # no connection is held while the (rate-limited, slow) fetch runs: the pooler drops idle ones
 
     def fetch(j):
         loc, par, sid = j
@@ -79,6 +79,7 @@ with connect() as conn, conn.cursor() as cur:
                 if r[2] < 0 or r[2] > cap: continue
                 (hot if r[1] >= hot_from else old).append(r)
             if i % 100 == 99: print(i + 1, "of", len(jobs), len(hot), "hot,", len(old), "old rows", flush=True)
+    conn = connect(); cur = conn.cursor()                                           # reconnect to write
     a, b = upsert_obs(cur, [(s, t, v, "unchecked", None) for s, t, v in hot], update=False)
     print(f"hot window: {a} readings, {b} new")
     files = 0
