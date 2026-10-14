@@ -26,7 +26,7 @@ def worker(name, rid):
     command, timeout_s = retry(get_cmd, f"{name} read command")
     print(f"[{name_now()}] {name} run {rid} start", flush=True)
     try:
-        p = subprocess.run(command, shell=True, cwd=LOAD, capture_output=True, text=True, timeout=timeout_s, env=dict(os.environ, PYTHONPATH=os.path.join(HERE, "..")))
+        p = subprocess.run(command, shell=True, cwd=LOAD, capture_output=True, text=True, timeout=timeout_s, env=dict(os.environ, PYTHONPATH=os.path.join(HERE, ".."), ETL_RUN_ID=str(rid)))
         st, out = ("ok" if p.returncode == 0 else "failed"), (p.stdout + p.stderr)[-4000:]
     except subprocess.TimeoutExpired as e:
         st, out = "timeout", ((e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")))[-2000:]
